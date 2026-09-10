@@ -1,0 +1,3 @@
+operator_id = "operator-one"
+machine_id = "pc-one"
+# Public operational identity only; never login/password/token.

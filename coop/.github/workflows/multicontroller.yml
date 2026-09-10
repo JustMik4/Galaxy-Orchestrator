@@ -1,0 +1,16 @@
+name: multicontroller
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Validate configuration and product checks
+        shell: pwsh
+        run: python .multicontroller/tools/multicontroller.py validate . --gate

@@ -24,7 +24,11 @@ Traffic, budget, and authority are routed based on specific model capabilities a
 ## Getting Started
 *Note: The master package must be kept outside of standard project directories. Projects should never be placed inside `.codex` or the master package.*
 
-1. Run the `Start.bat` script to open the Python 3.11+ staging menu.
+1. Run the `Iniciar.bat` script to open the Python 3.11+ staging menu.
 2. Select your target project directory (e.g., `C:\AI\Projetos\<name>`).
 3. Validate the installation preflight checks.
 4. The system will deploy the versioned `.codex`, `AGENT_TEAM.yml`, and `.multicontroller` snapshots without overriding your global settings.
+
+## Installation and validation
+
+See [installation guide](docs/INSTALLATION.md), [CO-OP setup](docs/COOP-BOOTSTRAP.md), [SPEC](docs/SPEC-V1.md), and [validation evidence](docs/VALIDATION.md). Version 1.3.0 passes 52 local tests; live GitHub coordination requires activation and validation in each project repository.

@@ -1,0 +1,32 @@
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "medium"
+
+[agents.explorer]
+description = "Multicontroller explorer; bounded contract, no recursive delegation."
+config_file = "agents/explorer.toml"
+
+[agents.researcher]
+description = "Multicontroller researcher; bounded contract, no recursive delegation."
+config_file = "agents/researcher.toml"
+
+[agents.worker]
+description = "Multicontroller worker; bounded contract, no recursive delegation."
+config_file = "agents/worker.toml"
+
+[agents.hard-worker]
+description = "Multicontroller hard-worker; bounded contract, no recursive delegation."
+config_file = "agents/hard-worker.toml"
+
+[agents.tester]
+description = "Multicontroller tester; bounded contract, no recursive delegation."
+config_file = "agents/tester.toml"
+
+[agents.reviewer]
+description = "Multicontroller reviewer; bounded contract, no recursive delegation."
+config_file = "agents/reviewer.toml"

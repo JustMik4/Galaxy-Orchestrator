@@ -1,0 +1,7 @@
+# Configure actual GitHub logins/teams before enabling code-owner review.
+# /.codex/ @your-org/maintainers
+# /.agents/ @your-org/maintainers
+# /.multicontroller/ @your-org/maintainers
+# /.github/ @your-org/maintainers
+# /AGENT_TEAM.yml @your-org/maintainers
+# /AGENTS.md @your-org/maintainers

@@ -1,0 +1,27 @@
+{
+  "base": "integration-base-sha",
+  "tested_base": "integration-base-sha",
+  "reviewed_base": "integration-base-sha",
+  "head": "current-sha",
+  "tested_head": "current-sha",
+  "reviewed_head": "current-sha",
+  "author": "one",
+  "reviewer": "one",
+  "mode": "CO-OP",
+  "grant_revision": 1,
+  "current_revision": 1,
+  "dependencies_merged": true,
+  "checks": {
+    "multicontroller / validate": "success"
+  },
+  "required_checks": [
+    "multicontroller / validate"
+  ],
+  "blockers": [],
+  "conversations_resolved": true,
+  "mergeable": true,
+  "protection_verified": true,
+  "implementer_session": "worker-context-1",
+  "reviewer_session": "review-context-2",
+  "review_result": "passed"
+}

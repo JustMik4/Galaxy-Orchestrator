@@ -1,0 +1,15 @@
+{
+  "active": [],
+  "request": {
+    "task": "42",
+    "owner": "one",
+    "machine": "pc-one",
+    "nonce": "sample-nonce",
+    "revision": 1,
+    "scope": [
+      "src/auth/"
+    ]
+  },
+  "actor": "lead",
+  "lead": "lead"
+}

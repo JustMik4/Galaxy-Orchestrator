@@ -1,0 +1,16 @@
+{
+  "id": "request-uuid",
+  "expected_version": 0,
+  "operation": "claim",
+  "task": {
+    "task": "42",
+    "owner": "one",
+    "machine": "pc-one",
+    "nonce": "unique-nonce",
+    "revision": 1,
+    "scope": [
+      "src/auth/"
+    ],
+    "depends_on": []
+  }
+}

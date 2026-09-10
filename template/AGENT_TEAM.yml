@@ -1,0 +1,25 @@
+{
+  "schema_version": 3,
+  "mode": "SOLO",
+  "integration_branch": "main",
+  "integration_operators": [],
+  "operators": [],
+  "coordination": {
+    "backend": "github-actions-issue",
+    "claim_protocol": "serialized-workflow",
+    "control_issue": null,
+    "automatic_expiry": false
+  },
+  "rules": {
+    "one_writer_per_scope": true,
+    "cross_review": "optional",
+    "direct_main_push": false
+  },
+  "review": {
+    "independent_agent_required": true,
+    "partner_review": "optional"
+  },
+  "required_checks": [
+    "multicontroller / validate"
+  ]
+}

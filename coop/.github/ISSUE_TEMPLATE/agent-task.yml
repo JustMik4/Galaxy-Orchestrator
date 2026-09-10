@@ -1,0 +1,18 @@
+name: Agent task
+description: Bounded task for Multicontroller CO-OP
+title: "[TASK] "
+body:
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract
+      description: Objective, task class/risk, scope, forbidden changes, base SHA, dependencies, acceptance, commands and budget.
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Claim request
+      description: Operator, machine, nonce and requested scope. Assignment alone is not a grant. Lead must grant and owner ACK before writing.
+    validations:
+      required: true

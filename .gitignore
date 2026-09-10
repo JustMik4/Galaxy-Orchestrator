@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local operator data
+local/
+.multicontroller/local/
+
+# Package implementation
+!/lib/
+!/lib/*.py

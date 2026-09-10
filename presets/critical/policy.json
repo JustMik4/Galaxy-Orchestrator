@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "preset": "critical",
+  "max_subagents": 2,
+  "max_attempts": 5,
+  "same_agent_repair": 1,
+  "fresh_agent_retry": 1,
+  "max_minutes": 60,
+  "automatic_max_ultra": false,
+  "permanent_changes": "pr-review"
+}

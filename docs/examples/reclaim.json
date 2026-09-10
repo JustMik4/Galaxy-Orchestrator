@@ -1,0 +1,29 @@
+{
+  "active": [
+    {
+      "task": "42",
+      "owner": "partner",
+      "machine": "pc-two",
+      "nonce": "old-nonce",
+      "revision": 1,
+      "scope": [
+        "src/auth/"
+      ]
+    }
+  ],
+  "request": {
+    "task": "42",
+    "owner": "primary",
+    "machine": "pc-one",
+    "nonce": "new-nonce",
+    "revision": 2,
+    "scope": [
+      "src/auth/"
+    ]
+  },
+  "actor": "primary",
+  "lead": "primary",
+  "expected_revision": 1,
+  "integration_fenced": true,
+  "reason": "Example only: primary resumes after verifying old integration paths disabled"
+}
