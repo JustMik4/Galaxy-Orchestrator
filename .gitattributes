@@ -1,0 +1,4 @@
+template/AGENTS.md text eol=lf
+template/.galaxy/project.yml text eol=lf
+template/.galaxy/team.yml text eol=lf
+template/.galaxy/checks.json text eol=lf

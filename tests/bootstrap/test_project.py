@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -120,6 +121,55 @@ class ProjectBoundaryTests(unittest.TestCase):
             relative: hashlib.sha256((template / relative).read_bytes()).hexdigest()
             for relative in TRACKED_DECLARATIONS
         })
+
+    def test_template_declaration_bytes_survive_autocrlf_checkout(self):
+        if subprocess.run(["git", "--version"], capture_output=True).returncode:
+            self.skipTest("Git unavailable")
+        repository = Path(__file__).resolve().parents[2]
+        template = repository / "template"
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            checkout = Path(temporary) / "checkout"
+            source.mkdir()
+            for relative in (*TRACKED_DECLARATIONS, "galaxy.lock"):
+                target = source / "template" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(template / relative, target)
+            attributes = repository / ".gitattributes"
+            if attributes.is_file():
+                shutil.copy2(attributes, source / ".gitattributes")
+            subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "config", "core.autocrlf", "false"], cwd=source, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=source, check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Galaxy Test"], cwd=source, check=True
+            )
+            subprocess.run(["git", "add", "."], cwd=source, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "fixture"], cwd=source, check=True
+            )
+            subprocess.run(
+                ["git", "-c", "core.autocrlf=true", "clone", "-q", source, checkout],
+                check=True,
+            )
+
+            try:
+                loaded = load_project(checkout / "template")
+            except ProjectConfigurationError as exc:
+                self.fail(f"autocrlf checkout must preserve declaration bytes: {exc}")
+
+            self.assertEqual(loaded.team.mode, "SOLO")
+            for relative in TRACKED_DECLARATIONS:
+                self.assertEqual(
+                    (checkout / "template" / relative).read_bytes(),
+                    (template / relative).read_bytes(),
+                    relative,
+                )
 
     def test_tracked_generated_and_legacy_files_are_reported_only(self):
         if subprocess.run(["git", "--version"], capture_output=True).returncode:
