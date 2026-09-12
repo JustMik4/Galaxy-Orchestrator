@@ -78,8 +78,10 @@ O projeto V2 inclui `.github/workflows/galaxy-validate.yml`. Ele:
 - usa permissões `contents: read`;
 - lê `galaxy.lock`;
 - aceita um SHA exato ou a tag exata `v<versão>`;
-- obtém a revisão fixada do Galaxy;
-- executa `galaxy.py validate <workspace> --gate` em Python 3.11.
+- obtém a mesma fonte Galaxy na revisão fixada pelo lock;
+- executa `galaxy.py bootstrap <workspace>` e, em seguida, `galaxy.py validate <workspace> --gate` em Python 3.11.
+
+O checkout novo usado pelo workflow deliberadamente começa sem `.codex/`; o bootstrap o gera localmente antes do gate. Não versione esse runtime nem substitua a fonte fixada por um checkout Galaxy diferente.
 
 Configure no ruleset da branch de integração:
 

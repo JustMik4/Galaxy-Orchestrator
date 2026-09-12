@@ -18,6 +18,8 @@ Role, specialist, model/effort e action capability são dimensões independentes
 
 O Capability Router escolhe o menor custo esperado que satisfaça risco, histórico, capacidade observada do host e quota. O Emergency Router pode mudar modelo, effort ou contexto, mas exige evidência e nunca ignora a reserva de quota. O Runtime Verifier registra o modelo/effort realmente executados; configuração declarada não é evidência de execução.
 
+Cada dispatch, retry ou escalation chama `dispatch authorize` antes de iniciar o subagente e usa somente a rota efetiva devolvida; a autorização requer suporte configurado e observado e aplica a quota local. Após o spawn, `dispatch verify` confirma o modelo/effort efetivos. Antes de revisão dispendiosa, `dispatch review-check` consulta o cache; somente fingerprint idêntico em head/base, escopo, contrato, testes, política e classe de revisor permite reutilização, que `dispatch review-record` registra.
+
 Contratos continuam exigindo DAG acíclico, escopos literais, um escritor por escopo, worktree isolado, revisão independente quando aplicável, CI da versão atual e integração pela autoridade serializada. Estado CO-OP autoritativo é o coordenador serializado (Issue/workflow e receipts), nunca uma nota Markdown ou inferência de branch.
 
 ## Layout e autoridade do vault Obsidian
@@ -50,7 +52,19 @@ vault:
 
 O sincronizador lê snapshots do coordenador e produz a mesma árvore para o mesmo estado, configuração e versão. Ordenação, timestamps derivados e serialização são determinísticos; `updated_at` de projeção vem do evento-fonte, não do relógio local. Cada nota traz `source_receipt`/revision para impedir downgrade.
 
-Em `projection`, edição humana na área gerada é sobrescrita somente com `--force` após backup; por padrão o sync recusa e relata drift. Em `project-owned`, alterações concorrentes ou revision incompatível geram `migration-conflict`/`vault-conflict`, preservam ambos os conteúdos (`*.conflict-*`) e exigem resolução explícita; nunca fazem merge semântico por LLM. Enquanto houver conflito, o coordenador permanece autoritativo e nenhuma claim/merge é inferida da nota. Offline, o vault pode ser lido/editado, mas publicação exige `galaxy vault sync` e validação do receipt atual.
+Com `enabled: true`, `galaxy vault sync` exige `--snapshot` contendo envelope autoritativo local e versionado exatamente nesta forma:
+
+```json
+{
+  "schema_version": 1,
+  "tasks": [{"task_id":"T-9","revision":1,"source_receipt":"receipt-1","status":"active","owner":"alice","updated_at":"2026-09-12T12:00:00Z"}],
+  "authority": [{"task_id":"T-9","revision":1,"source_receipt":"receipt-1"}]
+}
+```
+
+Os conjuntos e as tuplas (`task_id`, `revision`, `source_receipt`) de `tasks` e `authority` devem coincidir exatamente. Snapshots legados como objeto ou lista permanecem compatibilidade de status/leitura, mas não são aceitos para mutação. Com `enabled: false`, `sync` é no-op e não requer snapshot. Dependências são IDs escalares de tarefa; `include`/`exclude` é aplicado antes da renderização e não pode excluir frontmatter obrigatório de autoridade.
+
+Em `projection`, edição humana na área gerada é sobrescrita somente com `--force` após backup; por padrão o sync recusa e relata drift. `--force` nunca contorna envelope/autoridade, monotonicidade de revision/receipt, frontmatter malformado ou duplicado, nem validações de caminho/link. Em `project-owned`, alterações concorrentes ou revision incompatível geram `migration-conflict`/`vault-conflict`, preservam ambos os conteúdos (`*.conflict-*`) e exigem resolução explícita; nunca fazem merge semântico por LLM. Enquanto houver conflito, o coordenador permanece autoritativo e nenhuma claim/merge é inferida da nota. Offline, o vault pode ser lido/editado, mas publicação exige `galaxy vault sync` e validação do receipt atual.
 
 ### Privacidade
 
@@ -69,6 +83,10 @@ galaxy migrate PROJECT [--preview | --rollback RECEIPT]
 galaxy validate PROJECT [--gate]
 galaxy doctor PROJECT [--json]
 galaxy lock sync PROJECT [--check]
+galaxy dispatch authorize PROJECT --request FILE --capabilities FILE --quota FILE [--operator-config FILE]
+galaxy dispatch verify PROJECT --dispatch-id ID --spawn-id ID [--effective-model MODEL] [--effective-effort EFFORT] [--parent-thread ID]
+galaxy dispatch review-check PROJECT --fingerprint FILE
+galaxy dispatch review-record PROJECT --fingerprint FILE --evidence FILE
 galaxy specialists list
 galaxy specialists sync PROJECT [--check]
 galaxy cleanup PROJECT [--preview | --apply]
@@ -76,15 +94,16 @@ galaxy vault status PROJECT [--snapshot FILE]
 galaxy vault sync PROJECT [--snapshot FILE] [--check] [--force]
 ```
 
-`vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report. A sincronização não despacha agentes nem altera claims. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
+`vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report, sem relaxar os invariantes de autoridade e integridade do Vault. A sincronização não despacha agentes nem altera claims. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
 
-Roteamento, explicação de especialistas, Action Resolver e Resource Catalog são APIs internas nesta
-versão. Não há comandos públicos `route`, `specialist explain`, `vault export` ou `doctor --fix-safe`;
-documentação e automação não devem presumir superfícies que a CLI não registra.
+Action Resolver e Resource Catalog são APIs internas nesta versão. Não há comandos públicos `route`,
+`specialist explain`, `vault export` ou `doctor --fix-safe`; documentação e automação não devem presumir
+superfícies que a CLI não registra. Roteamento operacional e revisão são públicos exclusivamente pela
+família `galaxy dispatch` listada acima.
 
 ## Lock, bootstrap e migração
 
-`galaxy.lock` fixa versão do schema, release, hashes de declarações/especialistas/adapters e política efetiva. O mapa `declarations` contém exatamente SHA-256 de `AGENTS.md`, `.galaxy/project.yml`, `.galaxy/team.yml` e `.galaxy/checks.json`. O loader autentica e faz parse do mesmo snapshot de bytes; divergência falha fechada. Uma mudança revisada é aceita somente por `galaxy lock sync PROJECT`; `--check` é somente leitura. Fresh clone + bootstrap recria runtime Codex local sem vendorizar ferramentas no produto. O bootstrap não altera config global, login ou trust.
+`galaxy.lock` fixa versão do schema, release, hashes de declarações/especialistas/adapters e política efetiva. O mapa `declarations` contém exatamente SHA-256 de `AGENTS.md`, `.galaxy/project.yml`, `.galaxy/team.yml` e `.galaxy/checks.json`. O loader autentica e faz parse do mesmo snapshot de bytes; divergência falha fechada. Uma mudança revisada é aceita somente por `galaxy lock sync PROJECT`; `--check` é somente leitura. Fresh clone + bootstrap recria runtime Codex local sem vendorizar ferramentas no produto. `.galaxy/install/bootstrap-state.json` é ignorado e registra os bytes gerados de que o bootstrap é dono; marcador textual não autoriza alteração e estado ausente, corrompido ou divergente preserva artefatos como drift. O bootstrap não altera config global, login ou trust.
 
 Migração V1→V2 é semântica e restartável: preflight/preview, classificação (gerenciado, projeto-owned, gerado modificado), backup fora do projeto, aplicação, validação, receipt durável e rollback explícito. `AGENT_TEAM.yml` → `.galaxy/team.yml`, `.multicontroller/` → `.galaxy/` e workflows/checks têm regras próprias; nunca há substituição global de strings. Vaults V1, se encontrados, são apenas inventariados até o usuário escolher projeção ou declarations project-owned. Conflitos bloqueiam o commit da migração, preservando origem e destino.
 
@@ -96,4 +115,4 @@ Vault exige testes para: disabled/no-op; path interno e externo; projeção dete
 
 ## Decisões de implementação
 
-Resource Catalog/public-apis é secundário e opcional. Browser é fallback com aprovação quando connector/API/CLI não existir. Quota padrão para novos dispatches: parar com `<=15%` restante em cinco horas ou `<=2%` semanal; hard stop permite apenas cleanup/handoff. Review é independente e reutilizável por fingerprint somente quando head/base, escopo, contrato, testes e política coincidirem.
+Resource Catalog/public-apis é secundário e opcional. Browser é fallback com aprovação quando connector/API/CLI não existir. Quota padrão para novos dispatches: parar com `<=15%` restante em cinco horas ou `<=2%` semanal; hard stop permite apenas cleanup/handoff. Review é independente e reutilizável por fingerprint somente quando head/base, escopo, contrato, testes, política e classe de revisor coincidirem. O Lifecycle Manager recusa componentes link/reparse, vincula a identidade do preview ao apply, faz estágio e reverificação antes de apagar em POSIX e apaga no Windows somente pelo handle exato verificado.

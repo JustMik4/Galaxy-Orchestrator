@@ -20,18 +20,22 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 - Quota Guard local, com reserva padrão de 15% na janela de cinco horas e 2% na semanal;
 - Runtime Verifier para registrar modelo/esforço efetivos e separar mismatch de roteamento de falha do modelo;
 - cache de revisão por fingerprint de evidência para evitar revisões idênticas;
+- limite operacional público de despacho: autorização antes de dispatch/retry/escalation, verificação do runtime efetivo e consulta de cache antes de revisão dispendiosa;
 - especialistas com fonte Markdown/frontmatter, catálogo frio, hot set e materialização determinística.
 
 ### Operação e segurança
 
 - instalação e bootstrap V2 com separação entre declaração versionada e artefato gerado;
+- estado de bytes do bootstrap em `.galaxy/install/bootstrap-state.json`, preservando drift quando autoria gerada não é comprovada;
 - migração V1.3→V2 sem substituição global, com preview, backup externo, receipt, conflitos bloqueantes e rollback;
 - coordenação CO-OP V2 por workflow serializado, fixado à versão do lock e instalado somente nesse modo;
 - Galaxy Doctor para configuração, lock, bootstrap, Git, legado, checks, runtime, quota, ações, Vault e ciclo de vida;
 - Lifecycle Manager com preview padrão e aplicação explícita;
+- limpeza endurecida contra links/reparse e troca após preview, com estágio e reverificação em POSIX e handle verificado no Windows;
 - Action Resolver com navegador apenas após aprovação explícita;
 - Resource Catalog local e determinístico, com importador offline de candidatos `public-apis` não verificados;
 - projeção opcional em Obsidian Vault, desativada por padrão e com exclusões de privacidade.
+- sync de Vault habilitado somente com envelope autoritativo versionado e conjunto de autoridade correspondente.
 
 ### Compatibilidade
 
