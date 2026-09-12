@@ -187,19 +187,25 @@ V1_COOP_FILES = (
 )
 
 
-def _merge_gitattributes(original, canonical):
-    """Preserve project rules while ensuring every canonical Galaxy rule exists."""
-    if not original:
-        return canonical
-    existing = set(original.splitlines())
-    missing = [rule for rule in canonical.splitlines() if rule and rule not in existing]
-    if not missing:
-        return original
-    additions = (
-        [] if GALAXY_ATTRIBUTES_MARKER in existing else [GALAXY_ATTRIBUTES_MARKER]
-    ) + missing
-    separator = b'' if original.endswith((b'\n', b'\r')) else b'\n'
-    return original + separator + b'\n'.join(additions) + b'\n'
+def merge_gitattributes(original, canonical):
+    """Put one canonical Galaxy attributes block after all project rules."""
+    rules = tuple(
+        rule for rule in canonical.splitlines()
+        if rule and rule != GALAXY_ATTRIBUTES_MARKER
+    )
+    managed_lines = {GALAXY_ATTRIBUTES_MARKER, *rules}
+    project_content = b''.join(
+        line for line in original.splitlines(keepends=True)
+        if line.rstrip(b'\r\n') not in managed_lines
+    )
+    separator = (
+        b'' if not project_content or project_content.endswith((b'\n', b'\r'))
+        else b'\n'
+    )
+    block = GALAXY_ATTRIBUTES_MARKER + b'\n'
+    if rules:
+        block += b'\n'.join(rules) + b'\n'
+    return project_content + separator + block
 
 
 def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
@@ -280,7 +286,7 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
                     raise ValueError('Expected a file: ' + name)
                 current = target.read_bytes()
                 if name == '.gitattributes':
-                    content = _merge_gitattributes(current, content)
+                    content = merge_gitattributes(current, content)
                     if current != content:
                         changes[name] = content
                         expected_current[name] = current
@@ -290,6 +296,8 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
                 elif current != content:
                     raise ValueError('Existing incompatible managed file; reconcile first: ' + name)
             else:
+                if name == '.gitattributes':
+                    content = merge_gitattributes(b'', content)
                 changes[name] = content
                 expected_current[name] = None
 

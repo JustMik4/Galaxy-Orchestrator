@@ -246,21 +246,45 @@ class MigrationTests(unittest.TestCase):
 
     def test_migration_preserves_existing_attributes_and_autocrlf_clone_loads(self):
         attributes = self.project / ".gitattributes"
-        custom = b"*.bin binary\n# project policy\n"
-        attributes.write_bytes(custom)
+        canonical = (ROOT / "template/.gitattributes").read_bytes()
+        custom = (
+            b"*.bin binary\r\n"
+            b"# project policy\r\n"
+            b"* text=auto eol=crlf\r\n"
+        )
+        attributes.write_bytes(
+            b"# Galaxy declaration integrity\n" + canonical + custom
+        )
 
+        before_plan = self.snapshot()
+        migration_plan = plan(self.master, self.project)
+        self.assertEqual(before_plan, self.snapshot())
         receipt = apply(self.master, self.project)
         first = attributes.read_bytes()
         second = apply(self.master, self.project)
 
+        self.assertTrue(migration_plan.ready)
         self.assertEqual(receipt["status"], "success")
         self.assertEqual(second["status"], "already_migrated")
         self.assertEqual(attributes.read_bytes(), first)
-        self.assertTrue(first.startswith(custom))
+        self.assertEqual(first.count(custom), 1)
+        self.assertLess(
+            first.index(custom), first.index(b"# Galaxy declaration integrity\n")
+        )
+        self.assertTrue(
+            first.endswith(b"# Galaxy declaration integrity\n" + canonical)
+        )
+        self.assertEqual(first.count(b"# Galaxy declaration integrity\n"), 1)
+        for rule in canonical.splitlines():
+            self.assertEqual(first.splitlines().count(rule), 1, rule)
         _git(self.project, "init", "-q")
         _git(self.project, "config", "core.autocrlf", "false")
         _git(self.project, "config", "user.email", "test@example.invalid")
         _git(self.project, "config", "user.name", "Galaxy Test")
+        self.assertEqual(
+            _git(self.project, "check-attr", "text", "--", ".galaxy/team.yml"),
+            ".galaxy/team.yml: text: unset",
+        )
         _git(self.project, "add", ".")
         _git(self.project, "commit", "-qm", "migrated project")
         checkout = Path(self.temporary.name) / "autocrlf migrated checkout"

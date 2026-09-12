@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 from typing import Any, Mapping
 
+from ..installer import merge_gitattributes
 from .base import (
     MigrationConflictError,
     MigrationDetectionError,
@@ -225,14 +226,8 @@ def _ignore_bytes(project: Path) -> bytes:
 def _attributes_bytes(project: Path) -> bytes:
     path = project / ATTRIBUTES
     original = path.read_bytes() if path.is_file() else b""
-    existing = set(original.splitlines())
-    missing = [rule for rule in DECLARATION_ATTRIBUTE_RULES if rule not in existing]
-    if not missing:
-        return original
-    marker = b"# Galaxy declaration integrity"
-    additions = ([] if marker in existing else [marker]) + missing
-    separator = b"" if not original or original.endswith((b"\n", b"\r")) else b"\n"
-    return original + separator + b"\n".join(additions) + b"\n"
+    canonical = b"\n".join(DECLARATION_ATTRIBUTE_RULES) + b"\n"
+    return merge_gitattributes(original, canonical)
 
 
 def _vault_inventory(project: Path) -> tuple[str, ...]:

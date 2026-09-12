@@ -173,6 +173,16 @@ class GalaxyV2CliTests(unittest.TestCase):
             cwd=self.project, check=True,
         )
         installer.install_v2(ROOT, self.project)
+        attributes = self.project / ".gitattributes"
+        attributes.write_bytes(
+            attributes.read_bytes() + b"* text=auto eol=crlf\n"
+        )
+        installer.install_v2(ROOT, self.project)
+        resolved = subprocess.run(
+            ["git", "check-attr", "text", "--", ".galaxy/team.yml"],
+            cwd=self.project, text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(resolved.stdout.strip(), ".galaxy/team.yml: text: unset")
         subprocess.run(["git", "add", "."], cwd=self.project, check=True)
         subprocess.run(
             ["git", "commit", "-qm", "installed project"],
@@ -195,7 +205,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertEqual(loaded.team.mode, "SOLO")
         self.assertEqual(
             (checkout / ".gitattributes").read_bytes(),
-            (ROOT / "template/.gitattributes").read_bytes(),
+            attributes.read_bytes(),
         )
         for relative in TRACKED_DECLARATIONS:
             self.assertEqual(
@@ -206,8 +216,9 @@ class GalaxyV2CliTests(unittest.TestCase):
 
     def test_install_merges_existing_gitattributes_rules_deterministically(self):
         attributes = self.project / ".gitattributes"
-        project_rules = b"*.png binary\n# project attributes\n"
-        attributes.write_bytes(project_rules)
+        legacy_rules = (ROOT / "template/.gitattributes").read_bytes()
+        project_rules = b"*.png binary\r\n# project attributes\r\n"
+        attributes.write_bytes(legacy_rules + project_rules)
 
         first = installer.install_v2(ROOT, self.project)
         merged = attributes.read_bytes()
@@ -224,14 +235,35 @@ class GalaxyV2CliTests(unittest.TestCase):
     def test_repeat_install_preserves_user_added_gitattributes_rules(self):
         installer.install_v2(ROOT, self.project)
         attributes = self.project / ".gitattributes"
-        user_rule = b"docs/** linguist-documentation\n"
-        attributes.write_bytes(attributes.read_bytes() + user_rule)
+        user_rules = (
+            b"docs/** linguist-documentation\n"
+            b"* text=auto eol=crlf\n"
+        )
+        attributes.write_bytes(attributes.read_bytes() + user_rules)
         before = attributes.read_bytes()
 
-        result = installer.install_v2(ROOT, self.project)
-
-        self.assertEqual(result["changed"], [])
+        check = self.run_cli("install", self.project, "--check")
         self.assertEqual(attributes.read_bytes(), before)
+        result = installer.install_v2(ROOT, self.project)
+        merged = attributes.read_bytes()
+        second = installer.install_v2(ROOT, self.project)
+
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertIn(".gitattributes", json.loads(check.stdout)["changed"])
+        self.assertIn(".gitattributes", result["changed"])
+        self.assertEqual(second["changed"], [])
+        self.assertNotEqual(merged, before)
+        self.assertEqual(merged.count(user_rules), 1)
+        self.assertLess(
+            merged.index(user_rules),
+            merged.index(b"# Galaxy declaration integrity\n"),
+        )
+        self.assertTrue(
+            merged.endswith(
+                b"# Galaxy declaration integrity\n"
+                + (ROOT / "template/.gitattributes").read_bytes()
+            )
+        )
 
     def test_install_check_reports_attributes_merge_without_mutation(self):
         attributes = self.project / ".gitattributes"
