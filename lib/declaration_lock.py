@@ -52,29 +52,33 @@ class _BoundaryGuard:
         identities: tuple[_PathIdentity, ...],
         *,
         root_fd: int | None = None,
-        windows_handle: int | None = None,
+        windows_handles: tuple[int, ...] = (),
     ) -> None:
         self.root = root
         self.identities = identities
         self.root_fd = root_fd
-        self.windows_handle = windows_handle
+        self.windows_handles = windows_handles
 
     @classmethod
     def acquire(cls, root: Path) -> "_BoundaryGuard":
         identities = _capture_boundary_identities(root)
         if os.name == "nt":
-            handle, inode = _open_windows_directory_guard(root)
-            guard = cls(root, identities, windows_handle=handle)
+            handles = []
             try:
-                expected_root = identities[-1]
-                if inode != expected_root.inode:
-                    raise ProjectConfigurationError(
-                        "project root changed while acquiring boundary guard"
-                    )
+                for identity in identities:
+                    handle, inode = _open_windows_directory_guard(identity.path)
+                    handles.append(handle)
+                    if inode != identity.inode:
+                        raise ProjectConfigurationError(
+                            "project boundary changed while acquiring guard: "
+                            + str(identity.path)
+                        )
+                guard = cls(root, identities, windows_handles=tuple(handles))
                 guard.assert_unchanged()
                 return guard
             except BaseException:
-                guard.close()
+                for handle in reversed(handles):
+                    _close_windows_handle(handle)
                 raise
 
         flags = os.O_RDONLY
@@ -115,9 +119,13 @@ class _BoundaryGuard:
             expected = self.identities[-1]
             if (opened.st_dev, opened.st_ino) != (expected.device, expected.inode):
                 raise ProjectConfigurationError("guarded project root changed")
-        elif self.windows_handle is not None:
-            if _windows_handle_inode(self.windows_handle) != self.identities[-1].inode:
-                raise ProjectConfigurationError("guarded project root changed")
+        elif self.windows_handles:
+            opened = tuple(
+                _windows_handle_inode(handle) for handle in self.windows_handles
+            )
+            expected = tuple(identity.inode for identity in self.identities)
+            if opened != expected:
+                raise ProjectConfigurationError("guarded project boundary changed")
 
     def lstat_name(self, name: str) -> os.stat_result:
         if self.root_fd is not None:
@@ -125,17 +133,26 @@ class _BoundaryGuard:
         return (self.root / name).lstat()
 
     def create_stage(self, name: str, mode: int) -> int:
-        if self.root_fd is not None:
-            flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            flags |= getattr(os, "O_CLOEXEC", 0)
-            descriptor = os.open(name, flags, mode, dir_fd=self.root_fd)
-        else:
-            descriptor = _open_windows_stage(self.root / name)
-        os.fchmod(descriptor, mode)
-        return descriptor
+        descriptor = -1
+        try:
+            if self.root_fd is not None:
+                flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                descriptor = os.open(name, flags, mode, dir_fd=self.root_fd)
+            else:
+                descriptor = _open_windows_stage(self.root / name)
+            os.fchmod(descriptor, mode)
+            return descriptor
+        except BaseException:
+            if descriptor >= 0:
+                try:
+                    self.discard_stage(name, descriptor)
+                finally:
+                    os.close(descriptor)
+            raise
 
-    def replace_stage(self, name: str) -> None:
+    def replace_stage(self, name: str, descriptor: int) -> None:
         if self.root_fd is not None:
             os.replace(
                 name,
@@ -144,24 +161,34 @@ class _BoundaryGuard:
                 dst_dir_fd=self.root_fd,
             )
         else:
-            os.replace(self.root / name, self.root / _LOCK_PATH)
+            _rename_windows_stage(descriptor, self.windows_handles[-1])
 
-    def unlink_stage(self, name: str) -> None:
+    def discard_stage(self, name: str, descriptor: int) -> None:
+        """Delete only the inode/handle created for this operation."""
+        if self.root_fd is None:
+            _delete_windows_stage(descriptor)
+            return
         try:
-            if self.root_fd is not None:
+            opened = os.stat(descriptor)
+            named = self.lstat_name(name)
+        except OSError:
+            return
+        if (
+            stat.S_ISREG(named.st_mode)
+            and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
+        ):
+            try:
                 os.unlink(name, dir_fd=self.root_fd)
-            else:
-                (self.root / name).unlink()
-        except FileNotFoundError:
-            pass
+            except FileNotFoundError:
+                pass
 
     def close(self) -> None:
         if self.root_fd is not None:
             os.close(self.root_fd)
             self.root_fd = None
-        if self.windows_handle is not None:
-            _close_windows_handle(self.windows_handle)
-            self.windows_handle = None
+        for handle in reversed(self.windows_handles):
+            _close_windows_handle(handle)
+        self.windows_handles = ()
 
     def __enter__(self) -> "_BoundaryGuard":
         return self
@@ -282,14 +309,14 @@ def _open_windows_stage(path: Path) -> int:
     import msvcrt
 
     ctypes, wintypes, create, close = _windows_api()
-    generic_read_write = 0x80000000 | 0x40000000
-    share_read_delete = 0x00000001 | 0x00000004
+    generic_read_write_delete = 0x80000000 | 0x40000000 | 0x00010000
+    share_read = 0x00000001
     create_new = 1
     normal = 0x00000080
     handle = create(
         str(path),
-        generic_read_write,
-        share_read_delete,
+        generic_read_write_delete,
+        share_read,
         None,
         create_new,
         normal,
@@ -303,6 +330,104 @@ def _open_windows_stage(path: Path) -> int:
     except BaseException:
         close(handle)
         raise
+
+
+def _set_windows_file_information(
+    descriptor: int,
+    information_class: int,
+    information: object,
+    size: int,
+) -> None:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    set_information = ctypes.WinDLL(
+        "kernel32", use_last_error=True
+    ).SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+    if not set_information(handle, information_class, information, size):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _rename_windows_stage(descriptor: int, root_handle: int) -> None:
+    """Atomically promote the exact verified staged handle to galaxy.lock."""
+    import ctypes
+    from ctypes import wintypes
+
+    class FileRenameInformation(ctypes.Structure):
+        _fields_ = [
+            ("replace_if_exists", ctypes.c_ubyte),
+            ("root_directory", wintypes.HANDLE),
+            ("file_name_length", wintypes.DWORD),
+            ("file_name", wintypes.WCHAR * 1),
+        ]
+
+    destination = _windows_handle_path(root_handle).rstrip("\\/") + "\\" + _LOCK_PATH
+    encoded_name = destination.encode("utf-16-le")
+    name_offset = FileRenameInformation.file_name.offset
+    size = ctypes.sizeof(FileRenameInformation) + len(encoded_name)
+    buffer = ctypes.create_string_buffer(size)
+    information = ctypes.cast(
+        buffer, ctypes.POINTER(FileRenameInformation)
+    ).contents
+    information.replace_if_exists = 1
+    information.root_directory = wintypes.HANDLE()
+    information.file_name_length = len(encoded_name)
+    ctypes.memmove(
+        ctypes.addressof(buffer) + name_offset,
+        encoded_name,
+        len(encoded_name),
+    )
+    _set_windows_file_information(descriptor, 3, buffer, size)
+
+
+def _windows_handle_path(handle: int) -> str:
+    """Return the stable normalized DOS path represented by a directory handle."""
+    import ctypes
+    from ctypes import wintypes
+
+    get_path = ctypes.WinDLL(
+        "kernel32", use_last_error=True
+    ).GetFinalPathNameByHandleW
+    get_path.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    get_path.restype = wintypes.DWORD
+    required = get_path(wintypes.HANDLE(handle), None, 0, 0)
+    if not required:
+        raise ctypes.WinError(ctypes.get_last_error())
+    buffer = ctypes.create_unicode_buffer(required + 1)
+    written = get_path(wintypes.HANDLE(handle), buffer, len(buffer), 0)
+    if not written or written >= len(buffer):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return buffer.value
+
+
+def _delete_windows_stage(descriptor: int) -> None:
+    """Mark the exact staged handle for deletion without resolving its name."""
+    import ctypes
+
+    class FileDispositionInformation(ctypes.Structure):
+        _fields_ = [("delete_file", ctypes.c_ubyte)]
+
+    information = FileDispositionInformation(1)
+    _set_windows_file_information(
+        descriptor,
+        4,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    )
 
 
 def _close_windows_handle(handle: int) -> None:
@@ -456,9 +581,13 @@ def _atomic_write(
     if _is_link_or_reparse(path, current) or not stat.S_ISREG(current.st_mode):
         raise ProjectConfigurationError("galaxy.lock is not a safe regular file")
     temporary_name = ".galaxy.lock." + uuid.uuid4().hex + ".tmp"
-    descriptor = boundary.create_stage(temporary_name, stat.S_IMODE(current.st_mode))
-    staged = os.fstat(descriptor)
+    descriptor = -1
+    installed = False
     try:
+        descriptor = boundary.create_stage(
+            temporary_name, stat.S_IMODE(current.st_mode)
+        )
+        staged = os.fstat(descriptor)
         offset = 0
         while offset < len(data):
             offset += os.write(descriptor, data[offset:])
@@ -488,10 +617,15 @@ def _atomic_write(
         if staged_bytes != data:
             raise ProjectConfigurationError("staged galaxy.lock bytes changed concurrently")
         boundary.assert_unchanged()
-        boundary.replace_stage(temporary_name)
+        boundary.replace_stage(temporary_name, descriptor)
+        installed = True
     finally:
-        os.close(descriptor)
-        boundary.unlink_stage(temporary_name)
+        if descriptor >= 0:
+            try:
+                if not installed:
+                    boundary.discard_stage(temporary_name, descriptor)
+            finally:
+                os.close(descriptor)
 
 
 def _json_bytes(value: object) -> bytes:

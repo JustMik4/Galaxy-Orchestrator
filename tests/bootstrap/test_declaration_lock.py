@@ -264,6 +264,100 @@ class DeclarationLockTests(unittest.TestCase):
             if moved.exists():
                 moved.rename(self.root)
 
+    @unittest.skipUnless(os.name == "nt", "Windows handle regression")
+    def test_windows_guard_holds_every_ancestor_and_root_identity(self):
+        root = declaration_lock._checked_root(self.root)
+        with declaration_lock._BoundaryGuard.acquire(root) as boundary:
+            self.assertEqual(
+                len(boundary.windows_handles),
+                len(boundary.identities),
+            )
+            self.assertEqual(
+                [declaration_lock._windows_handle_inode(handle)
+                 for handle in boundary.windows_handles],
+                [identity.inode for identity in boundary.identities],
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle regression")
+    def test_windows_promotes_the_exact_verified_staged_handle(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        real_rename = declaration_lock._rename_windows_stage
+
+        with patch.object(
+            declaration_lock, "_rename_windows_stage", wraps=real_rename
+        ) as rename:
+            result = declaration_lock.sync(self.root)
+
+        self.assertTrue(result["applied"])
+        rename.assert_called_once()
+        descriptor, root_handle = rename.call_args.args
+        self.assertIsInstance(descriptor, int)
+        self.assertIsInstance(root_handle, int)
+        self.assertEqual(load_project(self.root).checks.commands, (("python", "-V"),))
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle regression")
+    def test_stage_setup_failures_close_handle_and_remove_exact_temp(self):
+        real_open = declaration_lock._open_windows_stage
+        real_fstat = declaration_lock.os.fstat
+        for failure in ("fchmod", "fstat"):
+            with self.subTest(failure=failure):
+                self.reset_project()
+                checks_path = self.root / ".galaxy/checks.json"
+                checks_path.write_text(json.dumps({
+                    "schema_version": 1, "commands": [["python", "-V"]]
+                }), encoding="utf-8")
+                before = self.lock_path.read_bytes()
+                descriptors = []
+
+                def tracked_open(path):
+                    descriptor = real_open(path)
+                    descriptors.append(descriptor)
+                    return descriptor
+
+                def injected_fstat(descriptor):
+                    if failure == "fstat" and descriptor in descriptors:
+                        raise OSError("injected stage fstat failure")
+                    return real_fstat(descriptor)
+
+                fchmod = (
+                    patch.object(
+                        declaration_lock.os,
+                        "fchmod",
+                        side_effect=OSError("injected stage fchmod failure"),
+                    )
+                    if failure == "fchmod"
+                    else patch.object(declaration_lock.os, "fchmod", wraps=os.fchmod)
+                )
+                try:
+                    with patch.object(
+                        declaration_lock, "_open_windows_stage", tracked_open
+                    ), patch.object(
+                        declaration_lock.os, "fstat", side_effect=injected_fstat
+                    ), fchmod:
+                        with self.assertRaises(OSError):
+                            declaration_lock.sync(self.root)
+
+                    self.assertEqual(list(self.root.glob(".galaxy.lock.*.tmp")), [])
+                    for descriptor in descriptors:
+                        with self.assertRaises(OSError):
+                            real_fstat(descriptor)
+                    moved = self.root.with_name("post-failure-move")
+                    self.root.rename(moved)
+                    moved.rename(self.root)
+                    self.assertEqual(self.lock_path.read_bytes(), before)
+                finally:
+                    for descriptor in descriptors:
+                        try:
+                            real_fstat(descriptor)
+                        except OSError:
+                            continue
+                        os.close(descriptor)
+                    for temporary in self.root.glob(".galaxy.lock.*.tmp"):
+                        temporary.unlink()
+
     def test_staged_temp_byte_tamper_is_rejected_without_install(self):
         checks_path = self.root / ".galaxy/checks.json"
         checks_path.write_text(json.dumps({
