@@ -302,7 +302,7 @@ class DeclarationLockTests(unittest.TestCase):
     def test_stage_setup_failures_close_handle_and_remove_exact_temp(self):
         real_open = declaration_lock._open_windows_stage
         real_fstat = declaration_lock.os.fstat
-        for failure in ("fchmod", "fstat"):
+        for failure in ("fstat",):
             with self.subTest(failure=failure):
                 self.reset_project()
                 checks_path = self.root / ".galaxy/checks.json"
@@ -322,21 +322,12 @@ class DeclarationLockTests(unittest.TestCase):
                         raise OSError("injected stage fstat failure")
                     return real_fstat(descriptor)
 
-                fchmod = (
-                    patch.object(
-                        declaration_lock.os,
-                        "fchmod",
-                        side_effect=OSError("injected stage fchmod failure"),
-                    )
-                    if failure == "fchmod"
-                    else patch.object(declaration_lock.os, "fchmod", wraps=os.fchmod)
-                )
                 try:
                     with patch.object(
                         declaration_lock, "_open_windows_stage", tracked_open
                     ), patch.object(
                         declaration_lock.os, "fstat", side_effect=injected_fstat
-                    ), fchmod:
+                    ):
                         with self.assertRaises(OSError):
                             declaration_lock.sync(self.root)
 
@@ -357,6 +348,25 @@ class DeclarationLockTests(unittest.TestCase):
                         os.close(descriptor)
                     for temporary in self.root.glob(".galaxy.lock.*.tmp"):
                         temporary.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle regression")
+    def test_windows_stage_does_not_require_fchmod(self):
+        self.reset_project()
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+
+        with patch.object(
+            declaration_lock.os,
+            "fchmod",
+            create=True,
+            side_effect=AssertionError("Windows staging must not call os.fchmod"),
+        ):
+            result = declaration_lock.sync(self.root)
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(list(self.root.glob(".galaxy.lock.*.tmp")), [])
 
     def test_staged_temp_byte_tamper_is_rejected_without_install(self):
         checks_path = self.root / ".galaxy/checks.json"

@@ -142,7 +142,14 @@ class _BoundaryGuard:
                 descriptor = os.open(name, flags, mode, dir_fd=self.root_fd)
             else:
                 descriptor = _open_windows_stage(self.root / name)
-            os.fchmod(descriptor, mode)
+            # ``os.fchmod`` is not exposed by every supported Windows Python
+            # build (notably the 3.12 GitHub runner).  The POSIX path creates
+            # the file relative to the guarded directory and must restore the
+            # existing lock's mode.  The Windows path is opened by handle with
+            # CreateFileW; Windows ACLs are inherited by that newly created
+            # file and POSIX mode bits are not an ACL-preserving mechanism.
+            if self.root_fd is not None:
+                os.fchmod(descriptor, mode)
             return descriptor
         except BaseException:
             if descriptor >= 0:
