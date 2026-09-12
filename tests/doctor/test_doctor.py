@@ -1,0 +1,100 @@
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from lib.actions import Capability
+from lib.doctor import CheckStatus, run_doctor
+from lib.quota import QuotaSnapshot
+
+
+class DoctorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".galaxy").mkdir()
+        (self.root / ".galaxy" / "project.yml").write_text(json.dumps({
+            "schema_version": 1, "name": "fixture", "adapter": "codex",
+            "specialists": {"packs": [], "names": []},
+            "vault": {"enabled": False, "path": ".galaxy/vault"},
+        }))
+        (self.root / ".galaxy" / "team.yml").write_text(json.dumps({
+            "schema_version": 1, "mode": "SOLO", "operators": [],
+        }))
+        (self.root / ".galaxy" / "checks.json").write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-m", "unittest"]],
+        }))
+        (self.root / "galaxy.lock").write_text(json.dumps({
+            "schema_version": 1,
+            "galaxy": {"version": "2.0.0", "source_revision": "fixture"},
+            "specialists": {"catalog_revision": "fixture", "packs": [], "names": []},
+            "adapters": {"schema_version": 1}, "project_schema": 1,
+            "migration_schema": 1,
+        }))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _git(self, *args):
+        return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True)
+
+    def test_clean_project_has_no_failures(self):
+        (self.root / ".gitignore").write_text(".env\n.codex/\n")
+        report = run_doctor(
+            self.root, galaxy_version="2.0.0",
+            runtime={"effective_model": "gpt-5.6-sol", "effective_effort": "medium"},
+            quota_snapshot=QuotaSnapshot(90, 90),
+            capabilities=[Capability("github.repository.create", "native", "github-native")],
+        )
+        self.assertEqual(report.exit_code, 0)
+        self.assertFalse(report.failed)
+
+    def test_tracked_generated_is_fail_by_default_and_warn_policy_is_supported(self):
+        generated = self.root / ".codex" / "config.toml"
+        generated.parent.mkdir()
+        generated.write_text('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\n')
+        self._git("init")
+        self._git("add", ".")
+        strict = run_doctor(self.root)
+        self.assertEqual(next(c for c in strict.checks if c.id == "tracked-generated").status, CheckStatus.FAIL)
+        permissive = run_doctor(self.root, generated_policy="warn")
+        self.assertEqual(next(c for c in permissive.checks if c.id == "tracked-generated").status, CheckStatus.WARN)
+
+    def test_legacy_and_duplicate_environment_are_warnings(self):
+        (self.root / "AGENT_TEAM.yml").write_text("legacy")
+        (self.root / ".env.example").write_text("A=1\n")
+        (self.root / "env.example").write_text("A=2\n")
+        report = run_doctor(self.root)
+        self.assertEqual(next(c for c in report.checks if c.id == "legacy-v1").status, CheckStatus.WARN)
+        self.assertEqual(next(c for c in report.checks if c.id == "duplicate-env-templates").status, CheckStatus.WARN)
+
+    def test_missing_declarations_fail(self):
+        (self.root / ".galaxy" / "team.yml").unlink()
+        report = run_doctor(self.root)
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(next(c for c in report.checks if c.id == "team-schema").status, CheckStatus.FAIL)
+
+    def test_unknown_telemetry_is_not_invented(self):
+        report = run_doctor(self.root)
+        self.assertEqual(next(c for c in report.checks if c.id == "runtime-verification").status, CheckStatus.UNKNOWN)
+        self.assertEqual(next(c for c in report.checks if c.id == "quota-telemetry").status, CheckStatus.UNKNOWN)
+        self.assertEqual(next(c for c in report.checks if c.id == "lifecycle-candidates").status, CheckStatus.UNKNOWN)
+
+    def test_browser_only_action_requires_approval(self):
+        capability = Capability("github.repository.create", "browser", "browser")
+        report = run_doctor(self.root, capabilities=[capability])
+        self.assertEqual(next(c for c in report.checks if c.id == "action-capability").status, CheckStatus.WARN)
+        approved = run_doctor(self.root, capabilities=[capability], action_approval=True)
+        self.assertEqual(next(c for c in approved.checks if c.id == "action-capability").status, CheckStatus.PASS)
+
+    def test_valid_codex_toml_is_reported_explicitly(self):
+        config = self.root / ".codex/config.toml"
+        config.parent.mkdir()
+        config.write_text('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\n')
+        report = run_doctor(self.root)
+        self.assertEqual(next(c for c in report.checks if c.id == "codex-config").status, CheckStatus.PASS)
+
+
+if __name__ == "__main__":
+    unittest.main()
