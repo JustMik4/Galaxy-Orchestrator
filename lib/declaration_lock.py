@@ -8,8 +8,8 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
-import tempfile
 from typing import Callable
+import uuid
 
 from .project import (
     LOCKED_DECLARATION_PATHS,
@@ -36,6 +36,140 @@ class _Snapshot:
         return dict(self.contents)
 
 
+@dataclass(frozen=True)
+class _PathIdentity:
+    path: Path
+    device: int
+    inode: int
+
+
+class _BoundaryGuard:
+    """Bind the operation to the original project hierarchy for its lifetime."""
+
+    def __init__(
+        self,
+        root: Path,
+        identities: tuple[_PathIdentity, ...],
+        *,
+        root_fd: int | None = None,
+        windows_handle: int | None = None,
+    ) -> None:
+        self.root = root
+        self.identities = identities
+        self.root_fd = root_fd
+        self.windows_handle = windows_handle
+
+    @classmethod
+    def acquire(cls, root: Path) -> "_BoundaryGuard":
+        identities = _capture_boundary_identities(root)
+        if os.name == "nt":
+            handle, inode = _open_windows_directory_guard(root)
+            guard = cls(root, identities, windows_handle=handle)
+            try:
+                expected_root = identities[-1]
+                if inode != expected_root.inode:
+                    raise ProjectConfigurationError(
+                        "project root changed while acquiring boundary guard"
+                    )
+                guard.assert_unchanged()
+                return guard
+            except BaseException:
+                guard.close()
+                raise
+
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        try:
+            root_fd = os.open(root, flags)
+        except OSError as exc:
+            raise ProjectConfigurationError(
+                "cannot guard project root: " + str(root)
+            ) from exc
+        guard = cls(root, identities, root_fd=root_fd)
+        try:
+            opened = os.fstat(root_fd)
+            expected_root = identities[-1]
+            if (opened.st_dev, opened.st_ino) != (
+                expected_root.device,
+                expected_root.inode,
+            ):
+                raise ProjectConfigurationError(
+                    "project root changed while acquiring boundary guard"
+                )
+            guard.assert_unchanged()
+            return guard
+        except BaseException:
+            guard.close()
+            raise
+
+    def assert_unchanged(self) -> None:
+        current = _capture_boundary_identities(self.root)
+        if current != self.identities:
+            raise ProjectConfigurationError(
+                "project root or ancestor changed concurrently"
+            )
+        if self.root_fd is not None:
+            opened = os.fstat(self.root_fd)
+            expected = self.identities[-1]
+            if (opened.st_dev, opened.st_ino) != (expected.device, expected.inode):
+                raise ProjectConfigurationError("guarded project root changed")
+        elif self.windows_handle is not None:
+            if _windows_handle_inode(self.windows_handle) != self.identities[-1].inode:
+                raise ProjectConfigurationError("guarded project root changed")
+
+    def lstat_name(self, name: str) -> os.stat_result:
+        if self.root_fd is not None:
+            return os.stat(name, dir_fd=self.root_fd, follow_symlinks=False)
+        return (self.root / name).lstat()
+
+    def create_stage(self, name: str, mode: int) -> int:
+        if self.root_fd is not None:
+            flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            descriptor = os.open(name, flags, mode, dir_fd=self.root_fd)
+        else:
+            descriptor = _open_windows_stage(self.root / name)
+        os.fchmod(descriptor, mode)
+        return descriptor
+
+    def replace_stage(self, name: str) -> None:
+        if self.root_fd is not None:
+            os.replace(
+                name,
+                _LOCK_PATH,
+                src_dir_fd=self.root_fd,
+                dst_dir_fd=self.root_fd,
+            )
+        else:
+            os.replace(self.root / name, self.root / _LOCK_PATH)
+
+    def unlink_stage(self, name: str) -> None:
+        try:
+            if self.root_fd is not None:
+                os.unlink(name, dir_fd=self.root_fd)
+            else:
+                (self.root / name).unlink()
+        except FileNotFoundError:
+            pass
+
+    def close(self) -> None:
+        if self.root_fd is not None:
+            os.close(self.root_fd)
+            self.root_fd = None
+        if self.windows_handle is not None:
+            _close_windows_handle(self.windows_handle)
+            self.windows_handle = None
+
+    def __enter__(self) -> "_BoundaryGuard":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
 def _is_link_or_reparse(path: Path, info: os.stat_result) -> bool:
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     junction = getattr(path, "is_junction", None)
@@ -51,6 +185,129 @@ def _lstat(path: Path) -> os.stat_result | None:
         return path.lstat()
     except FileNotFoundError:
         return None
+
+
+def _capture_boundary_identities(root: Path) -> tuple[_PathIdentity, ...]:
+    identities = []
+    for candidate in (*reversed(root.parents), root):
+        info = _lstat(candidate)
+        if (
+            info is None
+            or _is_link_or_reparse(candidate, info)
+            or not stat.S_ISDIR(info.st_mode)
+        ):
+            raise ProjectConfigurationError(
+                "project root or ancestor is missing, non-directory, or link/reparse: "
+                + str(candidate)
+            )
+        identities.append(_PathIdentity(candidate, info.st_dev, info.st_ino))
+    return tuple(identities)
+
+
+def _windows_api():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    return ctypes, wintypes, create, close
+
+
+def _open_windows_directory_guard(path: Path) -> tuple[int, int]:
+    ctypes, wintypes, create, close = _windows_api()
+    generic_read = 0x80000000
+    share_read_write = 0x00000001 | 0x00000002
+    open_existing = 3
+    backup_semantics = 0x02000000
+    open_reparse = 0x00200000
+    handle = create(
+        str(path),
+        generic_read,
+        share_read_write,
+        None,
+        open_existing,
+        backup_semantics | open_reparse,
+        None,
+    )
+    invalid = wintypes.HANDLE(-1).value
+    if handle == invalid:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return int(handle), _windows_handle_inode(int(handle))
+    except BaseException:
+        close(handle)
+        raise
+
+
+def _windows_handle_inode(handle: int) -> int:
+    ctypes, wintypes, _create, _close = _windows_api()
+
+    class FileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("access_time", wintypes.FILETIME),
+            ("write_time", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("index_high", wintypes.DWORD),
+            ("index_low", wintypes.DWORD),
+        ]
+
+    get_info = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandle
+    get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(FileInformation)]
+    get_info.restype = wintypes.BOOL
+    info = FileInformation()
+    if not get_info(wintypes.HANDLE(handle), ctypes.byref(info)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return (info.index_high << 32) | info.index_low
+
+
+def _open_windows_stage(path: Path) -> int:
+    import msvcrt
+
+    ctypes, wintypes, create, close = _windows_api()
+    generic_read_write = 0x80000000 | 0x40000000
+    share_read_delete = 0x00000001 | 0x00000004
+    create_new = 1
+    normal = 0x00000080
+    handle = create(
+        str(path),
+        generic_read_write,
+        share_read_delete,
+        None,
+        create_new,
+        normal,
+        None,
+    )
+    invalid = wintypes.HANDLE(-1).value
+    if handle == invalid:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(int(handle), os.O_RDWR | os.O_BINARY)
+    except BaseException:
+        close(handle)
+        raise
+
+
+def _close_windows_handle(handle: int) -> None:
+    _ctypes, wintypes, _create, close = _windows_api()
+    close(wintypes.HANDLE(handle))
 
 
 def _checked_root(value: Path | str) -> Path:
@@ -191,38 +448,50 @@ def _atomic_write(
     path: Path,
     data: bytes,
     unchanged: Callable[[], None],
+    boundary: _BoundaryGuard,
 ) -> None:
     """Stage deterministic bytes and replace only after the final snapshot guard."""
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".galaxy.lock.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
+    boundary.assert_unchanged()
+    current = boundary.lstat_name(_LOCK_PATH)
+    if _is_link_or_reparse(path, current) or not stat.S_ISREG(current.st_mode):
+        raise ProjectConfigurationError("galaxy.lock is not a safe regular file")
+    temporary_name = ".galaxy.lock." + uuid.uuid4().hex + ".tmp"
+    descriptor = boundary.create_stage(temporary_name, stat.S_IMODE(current.st_mode))
+    staged = os.fstat(descriptor)
     try:
-        current = path.lstat()
-        staged = os.fstat(descriptor)
-        os.chmod(temporary, stat.S_IMODE(current.st_mode))
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = -1
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        unchanged()
-        temporary_info = temporary.lstat()
+        offset = 0
+        while offset < len(data):
+            offset += os.write(descriptor, data[offset:])
+        os.fsync(descriptor)
+        try:
+            unchanged()
+        except OSError as exc:
+            raise ProjectConfigurationError(
+                "staged galaxy.lock tamper or concurrent filesystem change"
+            ) from exc
+        boundary.assert_unchanged()
+        temporary_info = boundary.lstat_name(temporary_name)
         if (
-            _is_link_or_reparse(temporary, temporary_info)
+            _is_link_or_reparse(boundary.root / temporary_name, temporary_info)
             or not stat.S_ISREG(temporary_info.st_mode)
             or (staged.st_dev, staged.st_ino)
             != (temporary_info.st_dev, temporary_info.st_ino)
         ):
             raise ProjectConfigurationError("staged galaxy.lock changed concurrently")
-        os.replace(temporary, path)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        staged_bytes = b""
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            staged_bytes += chunk
+        if staged_bytes != data:
+            raise ProjectConfigurationError("staged galaxy.lock bytes changed concurrently")
+        boundary.assert_unchanged()
+        boundary.replace_stage(temporary_name)
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        info = _lstat(temporary)
-        if info is not None:
-            if _is_link_or_reparse(temporary, info) or stat.S_ISREG(info.st_mode):
-                temporary.unlink()
+        os.close(descriptor)
+        boundary.unlink_stage(temporary_name)
 
 
 def _json_bytes(value: object) -> bytes:
@@ -236,36 +505,45 @@ def _json_bytes(value: object) -> bytes:
 def sync(project_root: Path | str, *, check: bool = False) -> dict[str, object]:
     """Check or atomically refresh exactly the four declaration digests."""
     root = _checked_root(project_root)
-    snapshot = _capture(root)
-    values = snapshot.bytes_by_path
-    _project, _team, _checks, lock = _validate(snapshot)
-    hashes = {
-        relative: hashlib.sha256(values[relative]).hexdigest()
-        for relative in LOCKED_DECLARATION_PATHS
-    }
-    stale = sorted(
-        relative
-        for relative in LOCKED_DECLARATION_PATHS
-        if hashes[relative] != lock.declaration_hashes[relative]
-    )
-    result: dict[str, object] = {
-        "applied": False,
-        "check": check,
-        "declarations": hashes,
-        "stale": stale,
-        "status": "stale" if stale else "current",
-        "written": [],
-    }
-    if check or not stale:
-        return result
+    with _BoundaryGuard.acquire(root) as boundary:
+        boundary.assert_unchanged()
+        snapshot = _capture(root)
+        boundary.assert_unchanged()
+        values = snapshot.bytes_by_path
+        _project, _team, _checks, lock = _validate(snapshot)
+        boundary.assert_unchanged()
+        hashes = {
+            relative: hashlib.sha256(values[relative]).hexdigest()
+            for relative in LOCKED_DECLARATION_PATHS
+        }
+        stale = sorted(
+            relative
+            for relative in LOCKED_DECLARATION_PATHS
+            if hashes[relative] != lock.declaration_hashes[relative]
+        )
+        result: dict[str, object] = {
+            "applied": False,
+            "check": check,
+            "declarations": hashes,
+            "stale": stale,
+            "status": "stale" if stale else "current",
+            "written": [],
+        }
+        if check or not stale:
+            return result
 
-    updated = dict(lock.raw)
-    updated["declarations"] = hashes
-    output = _json_bytes(updated)
-    lock_path = _declaration_path(root, _LOCK_PATH)
-    _atomic_write(lock_path, output, lambda: _assert_unchanged(snapshot))
-    result.update(applied=True, status="synced", written=[_LOCK_PATH])
-    return result
+        updated = dict(lock.raw)
+        updated["declarations"] = hashes
+        output = _json_bytes(updated)
+        lock_path = _declaration_path(root, _LOCK_PATH)
+        _atomic_write(
+            lock_path,
+            output,
+            lambda: _assert_unchanged(snapshot),
+            boundary,
+        )
+        result.update(applied=True, status="synced", written=[_LOCK_PATH])
+        return result
 
 
 __all__ = ["sync"]

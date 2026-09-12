@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -152,9 +153,9 @@ class DeclarationLockTests(unittest.TestCase):
                 }), encoding="utf-8")
                 before = self.lock_path.read_bytes()
 
-                def change_then_write(path, data, unchanged, *, changed=target):
+                def change_then_write(path, data, unchanged, *args, changed=target, **kwargs):
                     changed.write_bytes(changed.read_bytes() + b" ")
-                    return original_atomic_write(path, data, unchanged)
+                    return original_atomic_write(path, data, unchanged, *args, **kwargs)
 
                 with patch.object(declaration_lock, "_atomic_write", change_then_write):
                     with self.assertRaisesRegex(
@@ -164,6 +165,159 @@ class DeclarationLockTests(unittest.TestCase):
 
                 expected = before + (b" " if target == self.lock_path else b"")
                 self.assertEqual(self.lock_path.read_bytes(), expected)
+
+    def test_root_identity_change_to_identical_clone_is_rejected(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        original_atomic_write = declaration_lock._atomic_write
+        moved = self.root.with_name("moved-project")
+        replacement_lock = None
+
+        def redirect_then_write(path, data, unchanged, *args, **kwargs):
+            nonlocal replacement_lock
+            self.root.rename(moved)
+            shutil.copytree(moved, self.root)
+            replacement_lock = (self.root / "galaxy.lock").read_bytes()
+            return original_atomic_write(path, data, unchanged, *args, **kwargs)
+
+        try:
+            with patch.object(declaration_lock, "_atomic_write", redirect_then_write):
+                with self.assertRaises((OSError, ProjectConfigurationError)):
+                    declaration_lock.sync(self.root)
+            if replacement_lock is not None:
+                self.assertEqual((self.root / "galaxy.lock").read_bytes(), replacement_lock)
+        finally:
+            if moved.exists():
+                if self.root.exists():
+                    shutil.rmtree(self.root)
+                moved.rename(self.root)
+
+    def test_ancestor_identity_change_to_identical_clone_is_rejected(self):
+        ancestor = self.root.parent / "nested-boundary"
+        project = ancestor / "project"
+        project.mkdir(parents=True)
+        write_project(project)
+        checks_path = project / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        moved = ancestor.with_name("moved-boundary")
+        original_atomic_write = declaration_lock._atomic_write
+        replacement_before = None
+
+        def redirect_then_write(path, data, unchanged, *args, **kwargs):
+            nonlocal replacement_before
+            ancestor.rename(moved)
+            shutil.copytree(moved, ancestor)
+            replacement_before = (project / "galaxy.lock").read_bytes()
+            return original_atomic_write(path, data, unchanged, *args, **kwargs)
+
+        try:
+            with patch.object(declaration_lock, "_atomic_write", redirect_then_write):
+                with self.assertRaises((OSError, ProjectConfigurationError)):
+                    declaration_lock.sync(project)
+            if replacement_before is not None:
+                self.assertEqual(
+                    (project / "galaxy.lock").read_bytes(), replacement_before
+                )
+        finally:
+            if moved.exists():
+                if ancestor.exists():
+                    shutil.rmtree(ancestor)
+                moved.rename(ancestor)
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_windows_junction_redirection_never_writes_outside_lock(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        outside = self.root.parent / "outside-project"
+        shutil.copytree(self.root, outside)
+        outside_lock = outside / "galaxy.lock"
+        outside_before = outside_lock.read_bytes()
+        moved = self.root.with_name("moved-project")
+        original_atomic_write = declaration_lock._atomic_write
+
+        def junction_then_write(path, data, unchanged, *args, **kwargs):
+            self.root.rename(moved)
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(self.root), str(outside)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if created.returncode:
+                raise OSError(created.stderr or created.stdout)
+            return original_atomic_write(path, data, unchanged, *args, **kwargs)
+
+        try:
+            with patch.object(declaration_lock, "_atomic_write", junction_then_write):
+                with self.assertRaises((OSError, ProjectConfigurationError)):
+                    declaration_lock.sync(self.root)
+            self.assertEqual(outside_lock.read_bytes(), outside_before)
+        finally:
+            if self.root.is_junction():
+                self.root.rmdir()
+            if moved.exists():
+                moved.rename(self.root)
+
+    def test_staged_temp_byte_tamper_is_rejected_without_install(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        before = self.lock_path.read_bytes()
+        original_atomic_write = declaration_lock._atomic_write
+
+        def tamper_then_write(path, data, unchanged, *args, **kwargs):
+            def tamper_after_guard():
+                unchanged()
+                staged = list(path.parent.glob(".galaxy.lock.*.tmp"))
+                self.assertEqual(len(staged), 1)
+                staged[0].write_bytes(b'{"tampered":true}\n')
+
+            return original_atomic_write(path, data, tamper_after_guard, *args, **kwargs)
+
+        with patch.object(declaration_lock, "_atomic_write", tamper_then_write):
+            with self.assertRaisesRegex(ProjectConfigurationError, "staged galaxy.lock"):
+                declaration_lock.sync(self.root)
+
+        self.assertEqual(self.lock_path.read_bytes(), before)
+        self.assertEqual(list(self.root.glob(".galaxy.lock.*.tmp")), [])
+
+    def test_exact_staged_bytes_are_verified_before_install(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        checks_path.write_text(json.dumps({
+            "schema_version": 1, "commands": [["python", "-V"]]
+        }), encoding="utf-8")
+        before = self.lock_path.read_bytes()
+        real_read = os.read
+        tampered = False
+
+        def tamper_staged_descriptor(descriptor, size):
+            nonlocal tampered
+            if not tampered:
+                tampered = True
+                invalid = b'{"tampered":true}\n'
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                os.write(descriptor, invalid)
+                os.ftruncate(descriptor, len(invalid))
+                os.fsync(descriptor)
+                os.lseek(descriptor, 0, os.SEEK_SET)
+            return real_read(descriptor, size)
+
+        with patch.object(declaration_lock.os, "read", tamper_staged_descriptor):
+            with self.assertRaisesRegex(
+                ProjectConfigurationError, "staged galaxy.lock bytes"
+            ):
+                declaration_lock.sync(self.root)
+
+        self.assertTrue(tampered)
+        self.assertEqual(self.lock_path.read_bytes(), before)
+        self.assertEqual(list(self.root.glob(".galaxy.lock.*.tmp")), [])
 
     def test_project_relation_mismatch_and_missing_declaration_are_rejected(self):
         project_path = self.root / ".galaxy/project.yml"
