@@ -9,6 +9,7 @@ from unittest.mock import patch
 from lib.migrations import (
     MigrationConflictError,
     MigrationDetectionError,
+    MigrationError,
     apply,
     plan,
     rollback,
@@ -24,6 +25,9 @@ def _git(root, *args):
     return subprocess.run(
         ["git", *args], cwd=root, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class MigrationFixture:
@@ -300,6 +304,46 @@ class MigrationTests(unittest.TestCase):
         second = apply(self.master, self.project)
         self.assertEqual(second["status"], "already_migrated")
         self.assertEqual(vault.read_bytes(), b"user vault bytes\n")
+
+    def test_abrupt_interruption_requires_explicit_rollback_before_retry(self):
+        _git(self.project, "init", "-q")
+        _git(self.project, "add", ".")
+        before = self.snapshot()
+        before_index = (self.project / ".git/index").read_bytes()
+
+        with patch("lib.bootstrap.bootstrap_plan", side_effect=SystemExit("abrupt stop")):
+            with patch.object(
+                migration_module, "restore_backup", side_effect=SystemExit("process terminated")
+            ):
+                with self.assertRaisesRegex(SystemExit, "process terminated"):
+                    apply(self.master, self.project)
+
+        receipts = list((self.master / "local/migrations").glob("*/receipt.json"))
+        self.assertEqual(len(receipts), 1)
+        pending = json.loads(receipts[0].read_text(encoding="utf-8"))
+        self.assertEqual(pending["status"], "in_progress")
+        self.assertEqual(pending["configuration"]["status"], "passed")
+        self.assertEqual(pending["bootstrap"]["status"], "running")
+
+        partial = self.snapshot()
+        with self.assertRaisesRegex(MigrationError, "in progress.*rollback"):
+            apply(self.master, self.project)
+        self.assertEqual(partial, self.snapshot())
+
+        result = rollback(self.master, self.project, receipts[0])
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
+
+    def test_migrated_workflow_is_exact_canonical_template(self):
+        expected = (ROOT / "template/.github/workflows/galaxy-validate.yml").read_bytes()
+        receipt = apply(self.master, self.project)
+        actual = (self.project / ".github/workflows/galaxy-validate.yml").read_bytes()
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(actual, expected)
+        self.assertIn(b"galaxy.lock", actual)
+        self.assertIn(b"validate $env:GITHUB_WORKSPACE --gate", actual)
+        self.assertNotIn(b"validate --project", actual)
 
 
 if __name__ == "__main__":

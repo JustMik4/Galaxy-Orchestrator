@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import stat
 from typing import Any, Mapping
 
 from .base import (
@@ -149,27 +150,14 @@ def _lock_bytes(master: Path, declarations: Mapping[str, bytes]) -> bytes:
     })
 
 
-def _workflow_bytes() -> bytes:
-    # This is a format-aware replacement for the one known validation workflow,
-    # not a repository-wide product-name substitution.
-    return (
-        "name: galaxy\n"
-        "on:\n"
-        "  pull_request:\n"
-        "permissions:\n"
-        "  contents: read\n"
-        "jobs:\n"
-        "  validate:\n"
-        "    runs-on: windows-latest\n"
-        "    timeout-minutes: 15\n"
-        "    steps:\n"
-        "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n"
-        "        with:\n"
-        "          persist-credentials: false\n"
-        "      - name: Validate Galaxy declarations and product checks\n"
-        "        shell: pwsh\n"
-        "        run: galaxy validate --project .\n"
-    ).encode("utf-8")
+def _workflow_bytes(master: Path) -> bytes:
+    """Return the canonical tracked workflow instead of maintaining a fork."""
+    repository = Path(__file__).resolve().parents[2]
+    for root in (master, repository):
+        source = root / "template/.github/workflows/galaxy-validate.yml"
+        if source.is_file():
+            return source.read_bytes()
+    raise MigrationDetectionError("missing canonical Galaxy validation workflow template")
 
 
 def _ignore_bytes(project: Path) -> bytes:
@@ -211,12 +199,63 @@ def _is_known_generated(relative: str, manifest_files: set[str]) -> bool:
     return relative in manifest_files and relative.startswith(GENERATED_PREFIXES)
 
 
+def _in_progress_receipt(master: Path, project: Path) -> Path | None:
+    """Find a durable unfinished migration for this exact project, if present."""
+    store = master / "local/migrations"
+    if not store.is_dir():
+        return None
+    for directory in sorted(store.iterdir(), key=lambda item: item.name):
+        receipt_path = directory / "receipt.json"
+        try:
+            directory_info = directory.lstat()
+            receipt_info = receipt_path.lstat()
+        except OSError:
+            continue
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or stat.S_ISLNK(directory_info.st_mode)
+            or getattr(directory_info, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            or not stat.S_ISREG(receipt_info.st_mode)
+            or stat.S_ISLNK(receipt_info.st_mode)
+            or getattr(receipt_info, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        ):
+            continue
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt_project = Path(str(receipt.get("project", ""))).resolve()
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            receipt.get("migration_id") == MIGRATION_ID
+            and receipt.get("status") == "in_progress"
+            and receipt_project == project
+        ):
+            return receipt_path.resolve()
+    return None
+
+
+def _require_no_in_progress(master: Path, project: Path) -> None:
+    pending = _in_progress_receipt(master, project)
+    if pending is not None:
+        raise MigrationError(
+            "migration in progress; explicit rollback is required before retry: "
+            + str(pending)
+        )
+
+
 def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     """Build a complete side-effect-free migration plan."""
     master = checked_root(master)
     project = checked_root(project)
     if master == project or master in project.parents or project in master.parents:
         raise MigrationError("master and project must be separate directory trees")
+
+    # This check precedes the complete-V2 shortcut. A process may have stopped
+    # after writing declarations but before bootstrap, Git, Doctor, or receipt
+    # finalization, in which case the declarations alone prove no success.
+    _require_no_in_progress(master, project)
 
     if (project / "galaxy.lock").is_file() and not (project / TEAM).exists():
         try:
@@ -318,7 +357,7 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
             project_owned.add(OLD_WORKFLOW)
             preserved.add(OLD_WORKFLOW)
         elif workflow_current == workflow_expected:
-            writes[".github/workflows/galaxy-validate.yml"] = _workflow_bytes()
+            writes[".github/workflows/galaxy-validate.yml"] = _workflow_bytes(master)
             deletes.append(OLD_WORKFLOW)
             transformations.append({
                 "source": OLD_WORKFLOW,
@@ -414,6 +453,23 @@ def _default_doctor(project: Path) -> dict[str, Any]:
     }
 
 
+def _verify_completion_phases(receipt: Mapping[str, Any]) -> None:
+    complete = {"pass", "passed", "success", "ok"}
+    for phase in ("configuration", "bootstrap", "validation", "git"):
+        result = receipt.get(phase)
+        status = str(result.get("status", "") if isinstance(result, Mapping) else "").casefold()
+        if status not in complete:
+            raise MigrationError(
+                "migration cannot finalize before phase completes: " + phase
+            )
+    doctor = receipt.get("doctor")
+    doctor_status = str(
+        doctor.get("status", "") if isinstance(doctor, Mapping) else ""
+    ).casefold()
+    if doctor_status not in complete | {"accepted_pending_product_checks"}:
+        raise MigrationError("migration cannot finalize before phase completes: doctor")
+
+
 def apply(
     master: Path | str,
     project: Path | str,
@@ -454,9 +510,18 @@ def apply(
         "vault_inventory": list(migration_plan.vault_inventory),
         "status": "in_progress",
     }
+    receipt_path = backup / "receipt.json"
+    receipt["receipt_path"] = str(receipt_path)
+
+    def persist_receipt() -> None:
+        write_receipt(backup, receipt)
+
+    # The durable recovery handle must exist before the first project write.
+    persist_receipt()
     active_phase = "configuration"
     try:
         receipt[active_phase] = {"status": "running"}
+        persist_receipt()
         for relative, data in sorted(migration_plan._writes.items()):
             target = checked_project_path(project, relative)
             atomic_write(target, data)
@@ -467,11 +532,13 @@ def apply(
                     raise MigrationError("refusing to delete non-file: " + relative)
                 target.unlink()
         receipt[active_phase] = {"status": "passed"}
+        persist_receipt()
 
         from lib.bootstrap import bootstrap, bootstrap_plan
 
         active_phase = "bootstrap"
         receipt[active_phase] = {"status": "running"}
+        persist_receipt()
         catalog_root = master / "specialists"
         if not catalog_root.is_dir():
             catalog_root = Path(__file__).resolve().parents[2] / "specialists"
@@ -489,51 +556,58 @@ def apply(
         receipt["generated"] = sorted(
             set(receipt["generated"]) | set(bootstrap_result.written)
         )
+        persist_receipt()
 
         active_phase = "validation"
         receipt[active_phase] = {"status": "running"}
+        persist_receipt()
         validation_result = (
             validator(project) if validator is not None
             else _default_validator(project, catalog_root)
         )
         receipt["validation"] = normalize_check_result(validation_result, "validation")
+        persist_receipt()
 
         # The index boundary is deliberately after bootstrap/validation. Working
         # copies are never removed by these literal, one-path Git commands.
         active_phase = "git"
         receipt[active_phase] = {"status": "running", "untracked": []}
+        persist_receipt()
         for relative in migration_plan.untrack:
             run_git(project, ["rm", "--cached", "--force", "--ignore-unmatch", "--", relative])
             receipt["untracked"].append(relative)
             receipt[active_phase]["untracked"].append(relative)
+            persist_receipt()
         receipt[active_phase]["status"] = "passed"
+        persist_receipt()
 
         active_phase = "doctor"
         receipt[active_phase] = {"status": "running"}
+        persist_receipt()
         doctor_result = doctor(project) if doctor is not None else _default_doctor(project)
         if isinstance(doctor_result, Mapping):
             receipt[active_phase] = dict(doctor_result)
+            persist_receipt()
         receipt["doctor"] = normalize_check_result(doctor_result, "doctor")
+        persist_receipt()
+        _verify_completion_phases(receipt)
         receipt["status"] = "success"
         receipt["ended_at"] = utc_now()
         state["status"] = "complete"
         atomic_write(backup / "backup.json", json_bytes(state))
-        receipt_path = write_receipt(backup, receipt)
-        receipt["receipt_path"] = str(receipt_path)
-        # Include the path in the durable receipt as well.
-        write_receipt(backup, receipt)
+        persist_receipt()
         return receipt
     except BaseException as exc:
         restore_backup(backup, project, state)
+        state["status"] = "rolled_back_after_failure"
+        atomic_write(backup / "backup.json", json_bytes(state))
         receipt["status"] = "rolled_back_after_failure"
         receipt["ended_at"] = utc_now()
         receipt["error"] = {"type": type(exc).__name__, "message": str(exc)}
         phase_result = dict(receipt[active_phase])
         phase_result.update(status="failed", error=str(exc))
         receipt[active_phase] = phase_result
-        receipt_path = write_receipt(backup, receipt)
-        receipt["receipt_path"] = str(receipt_path)
-        write_receipt(backup, receipt)
+        persist_receipt()
         raise
 
 
@@ -580,8 +654,11 @@ def rollback(
     if data.get("migration_id") != MIGRATION_ID or state.get("migration_id") != MIGRATION_ID:
         raise MigrationError("receipt belongs to a different migration")
     restore_backup(receipt_path.parent, project, state)
+    state["status"] = "rolled_back"
+    state["rolled_back_at"] = utc_now()
+    atomic_write(receipt_path.parent / "backup.json", json_bytes(state))
     data["status"] = "rolled_back"
-    data["rolled_back_at"] = utc_now()
+    data["rolled_back_at"] = state["rolled_back_at"]
     write_receipt(receipt_path.parent, data)
     return data
 
