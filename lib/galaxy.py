@@ -272,7 +272,10 @@ def main(argv: list[str] | None = None) -> int:
             from .project import load_project
             from .vault import sync
             project = load_project(options.project)
-            snapshots = _load_snapshots(options.snapshot, require_authority=True)
+            snapshots = _load_snapshots(
+                options.snapshot,
+                require_authority=project.config.vault.get("enabled", False),
+            )
             payload = {
                 "command": "vault sync",
                 **sync(project.root, project.config.vault, snapshots,

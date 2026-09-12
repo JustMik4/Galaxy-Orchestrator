@@ -332,8 +332,11 @@ def _note_state(data):
         key, separator, raw = line.partition(':')
         if not separator:
             return None
+        key = key.strip()
+        if not key or key in values:
+            return None
         try:
-            values[key.strip()] = json.loads(raw.strip())
+            values[key] = json.loads(raw.strip())
         except json.JSONDecodeError:
             return None
     revision = values.get('revision')

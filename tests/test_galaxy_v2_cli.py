@@ -468,6 +468,27 @@ class GalaxyV2CliTests(unittest.TestCase):
         }
         self.assertEqual(before, after)
 
+    def test_disabled_vault_sync_check_needs_no_snapshot_and_writes_nothing(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        before = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+
+        result = self.run_cli("vault", "sync", self.project, "--check")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "vault sync")
+        self.assertFalse(payload["enabled"])
+        self.assertEqual(payload["written"], [])
+        after = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        self.assertEqual(before, after)
+
     def test_vault_sync_uses_explicit_snapshot_and_configured_path(self):
         install = self.run_cli("install", self.project)
         self.assertEqual(install.returncode, 0, install.stderr)

@@ -282,6 +282,22 @@ class VaultTests(unittest.TestCase):
             sync(self.project, config, self.envelope([self.snapshot]), force=True)
         self.assertIn('revision: broken', note.read_text(encoding='utf-8'))
 
+    def test_duplicate_frontmatter_key_is_malformed_and_force_preserves_note(self):
+        config = {'enabled': True, 'path': '.galaxy/vault'}
+        current = {**self.snapshot, 'revision': 7, 'source_receipt': 'receipt-7'}
+        sync(self.project, config, self.envelope([current]))
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        duplicated = note.read_bytes().replace(
+            b'revision: 7\n', b'revision: 7\nrevision: 1\n',
+        )
+        note.write_bytes(duplicated)
+        incoming = {**self.snapshot, 'revision': 3, 'source_receipt': 'receipt-3'}
+
+        with self.assertRaisesRegex(VaultError, 'malformed'):
+            sync(self.project, config, self.envelope([incoming]), force=True)
+
+        self.assertEqual(note.read_bytes(), duplicated)
+
     def test_plural_authority_excludes_are_rejected(self):
         for field in ('revisions', 'source_receipts'):
             with self.subTest(field=field):
