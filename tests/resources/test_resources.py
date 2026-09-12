@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from lib.resources import (
     Resource,
@@ -68,6 +70,42 @@ class ResourceSchemaTests(unittest.TestCase):
         with self.assertRaises(ResourceValidationError):
             ResourceCatalog([{"name": "not-validated"}])
 
+    def test_catalog_schema_version_rejects_boolean(self):
+        with self.assertRaises(ResourceValidationError):
+            ResourceCatalog.from_mapping({"schema_version": True, "resources": []})
+
+    def test_urls_reject_ambiguous_or_malformed_authorities_with_domain_error(self):
+        valid = Resource(
+            "Development", "Example", "Official documentation.", "none", True,
+            "galaxy-builtin", "builtin-v1", "verified", "https://example.com/docs",
+        ).to_mapping()
+        invalid = (
+            " https://example.com/docs",
+            "https://example.com/a path",
+            "https:\\example.com\\docs",
+            "https:///docs",
+            "https://.com/docs",
+            "https://user@example.com/docs",
+            "https://example.com:not-a-port/docs",
+            "https://example.com:70000/docs",
+            "https://[::1/docs",
+        )
+        for location in invalid:
+            with self.subTest(location=location):
+                with self.assertRaises(ResourceValidationError):
+                    Resource.from_mapping({**valid, "official_docs_location": location})
+
+    def test_enum_fields_reject_non_strings_with_domain_error(self):
+        valid = Resource(
+            "Development", "Example", "Official documentation.", "none", True,
+            "galaxy-builtin", "builtin-v1", "verified", "https://example.com/docs",
+        ).to_mapping()
+        for field in ("auth_type", "verification_status"):
+            for value in ([], {}, 1, True, None):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(ResourceValidationError):
+                        Resource.from_mapping({**valid, field: value})
+
 
 class PublicApisImporterTests(unittest.TestCase):
     def test_local_markdown_import_is_compact_and_always_unverified(self):
@@ -89,6 +127,47 @@ class PublicApisImporterTests(unittest.TestCase):
         self.assertEqual(len(from_file), 3)
         with self.assertRaises(ResourceValidationError):
             import_public_apis("https://raw.githubusercontent.com/public-apis/public-apis/master/README.md", source_commit="x")
+
+    def test_unc_and_device_strings_are_rejected_before_filesystem_access(self):
+        locations = (
+            r"\\server\share\README.md",
+            r"\\?\C:\safe-looking\README.md",
+            r"\\.\C:\safe-looking\README.md",
+            "smb://server/share/README.md",
+        )
+        for location in locations:
+            with self.subTest(location=location):
+                with mock.patch.object(Path, "is_file", side_effect=AssertionError("metadata access")) as is_file:
+                    with mock.patch.object(Path, "read_text", side_effect=AssertionError("file access")) as read_text:
+                        with self.assertRaises(ResourceValidationError):
+                            import_public_apis(location, source_commit="abc")
+                is_file.assert_not_called()
+                read_text.assert_not_called()
+
+    def test_short_text_and_string_paths_are_distinguished_without_probing_text(self):
+        with mock.patch.object(Path, "is_file", side_effect=AssertionError("metadata access")) as is_file:
+            self.assertEqual(import_public_apis("plain local text", source_commit="abc"), ())
+        is_file.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "public-apis.md"
+            path.write_text(PUBLIC_APIS_SAMPLE, encoding="utf-8")
+            self.assertEqual(len(import_public_apis(str(path), source_commit="abc")), 3)
+            missing = Path(temporary) / "missing-public-apis.md"
+            with self.assertRaises(ResourceValidationError):
+                import_public_apis(str(missing), source_commit="abc")
+
+    def test_explicit_symlink_source_is_never_followed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "actual.md"
+            link = root / "linked.md"
+            target.write_text(PUBLIC_APIS_SAMPLE, encoding="utf-8")
+            try:
+                os.symlink(target, link)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest("symlink creation unavailable: " + str(exc))
+            with self.assertRaises(ResourceValidationError):
+                import_public_apis(link, source_commit="abc")
 
     def test_verification_requires_explicit_https_official_documentation(self):
         candidate = import_public_apis(PUBLIC_APIS_SAMPLE, source_commit="abc123")[0]
