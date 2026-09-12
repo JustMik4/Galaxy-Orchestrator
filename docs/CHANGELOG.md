@@ -1,31 +1,52 @@
-# Alterações
+# Changelog
 
-Versão 1.3: integração equivalente por fila Actions e Issue canônica substitui lead pessoal fixo. Seções anteriores registram histórico e não prevalecem sobre a SPEC atual.
+As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especificação histórica V1 permanece em [SPEC-V1.md](SPEC-V1.md).
 
-## 1.3.0
+## 2.0.0 — candidato V2
 
-- Integradores autorizados com autoridade equivalente, sem lead pessoal obrigatório.
-- Claims e merges serializados por GitHub Actions e Issue canônica versionada.
-- Recuperação por outro integrante após resposta perdida; retomada preserva contrato e dependências.
-- Migração para schema 3 e roteiro de ativação/publicação.
-- Onze testes adicionais do coordenador com transporte simulado.
+### Identidade e contrato do projeto
 
-## 1.2.0
+- produto e CLI canônicos renomeados para Galaxy Orchestrator e `galaxy`;
+- namespace de projeto movido para `.galaxy/`, com `galaxy.lock` reproduzível;
+- `.codex/` passou a ser saída local gerada, não conteúdo vendorizado;
+- `multicontroller.py` mantido temporariamente como wrapper de compatibilidade;
+- branch prefix nova `galaxy/*`, com reconhecimento de `codex/*` no ciclo de vida histórico.
 
-- CO-OP com um operador; revisão do parceiro opcional.
-- Agente revisor independente obrigatório com evidência de sessão/head/base.
-- Retomada pelo principal sem ACK após impedir integração antiga.
-- Migração da política AGENT_TEAM schema 1→2 preserva identidades.
-- Instruções GitHub retiram dependência de aprovação humana externa.
+### Orquestração
 
-## 1.1.0
+- Sol Medium como root normal gerado pelo adaptador Codex;
+- Capability Router com perfis `balanced` e `critical`, rotas intermediárias e escalada emergencial;
+- Quota Guard local, com reserva padrão de 15% na janela de cinco horas e 2% na semanal;
+- Runtime Verifier para registrar modelo/esforço efetivos e separar mismatch de roteamento de falha do modelo;
+- cache de revisão por fingerprint de evidência para evitar revisões idênticas;
+- especialistas com fonte Markdown/frontmatter, catálogo frio, hot set e materialização determinística.
 
-- `Iniciar.bat`: menu para criar/importar projeto, instalar em projeto existente e validar configuração.
-- Destino padrão `AI/Projetos`, irmão de `AI/Codex-Multicontroller`.
-- Importação para pasta nova sem mover origem; criação temporária com rollback; recusa de conflitos.
-- Seleção de modo/preset e confirmação do destino.
-- Oito testes adicionais de criação/importação, incluindo pastas vazias e erros de leitura.
+### Operação e segurança
 
-## 1.0.0
+- instalação e bootstrap V2 com separação entre declaração versionada e artefato gerado;
+- migração V1.3→V2 sem substituição global, com preview, backup externo, receipt, conflitos bloqueantes e rollback;
+- Galaxy Doctor para configuração, lock, bootstrap, Git, legado, checks, runtime, quota, ações, Vault e ciclo de vida;
+- Lifecycle Manager com preview padrão e aplicação explícita;
+- Action Resolver com navegador apenas após aprovação explícita;
+- Resource Catalog local e determinístico, com importador offline de candidatos `public-apis` não verificados;
+- projeção opcional em Obsidian Vault, desativada por padrão e com exclusões de privacidade.
 
-SPEC, auditoria, protocolo SOLO/CO-OP, Adaptive Controller, roles, skill, instalador PowerShell e 27 testes.
+### Compatibilidade
+
+- garantias V1 de SOLO, CO-OP, um escritor por escopo, DAG, revisão independente, merge gate, rollback, checks, Windows e Python 3.11+ preservadas no contrato V2;
+- `.multicontroller/`, `AGENT_TEAM.yml`, `.multicontroller/tools` e metadados antigos reconhecidos somente para migração/compatibilidade;
+- documentação V1 preservada como histórico.
+
+### Aceitação ainda pendente
+
+Esta entrada não declara concluídos o smoke test do projeto Lexy, a suíte final completa, a renomeação física para `C:\AI\Galaxy-Orchestrator`, a renomeação do repositório no GitHub ou a configuração final de rulesets. Cada item exige evidência própria antes da publicação.
+
+## 1.3.0 — histórico
+
+- presets SOLO e CO-OP;
+- manifestos, política e checks do projeto;
+- coordenação serializada por issue no GitHub;
+- automação `validate`/`gate` e ferramentas vendorizadas no projeto;
+- validação independente, protocolo de claim e recuperação V1.
+
+Os detalhes normativos dessa linha estão em [SPEC-V1.md](SPEC-V1.md).

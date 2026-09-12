@@ -1,163 +1,182 @@
-# Codex-Multicontroller Environment 1.3.0
+# Galaxy Orchestrator V2
 
-Pacote mestre reutilizável para Codex nativo, com SOLO e CO-OP entre dois PCs.
-Inclui SPEC auditada, roles Luna/Sol/Astra, Adaptive Controller, skill, instalador Windows,
-templates GitHub e testes. Não contém credenciais nem instala serviços externos.
+O Galaxy Orchestrator coordena agentes de engenharia com roteamento por capacidade, proteção de quota, bootstrap reproduzível e limites explícitos de autoridade. A versão canônica deste checkout é **2.0.0**.
 
-## Iniciar com dois cliques
+O código de desenvolvimento ainda pode estar aberto na pasta histórica `C:\AI\Codex-Multicontroller`. O destino canônico é `C:\AI\Galaxy-Orchestrator` e o repositório-alvo é `JustMik4/Galaxy-Orchestrator`; a mudança física e a renomeação no GitHub só são consideradas concluídas depois da validação final descrita em [Publicação](docs/PUBLISH.md).
 
-Extraia o ZIP em `C:\AI` e abra `Codex-Multicontroller\Iniciar.bat`.
-O menu permite criar um projeto vazio, copiar uma pasta/arquivo para um projeto novo,
-instalar em uma pasta de projeto existente ou validar sua configuração.
-Escolha SOLO/CO-OP e balanced/critical, confira o destino e confirme com `S`.
+## Requisitos
 
-Os novos projetos ficam em `AI\Projetos`, ao lado do mestre. A origem importada permanece intacta.
-O assistente requer Python 3.11+; não precisa compilar um EXE nem instalar dependências Python adicionais.
-Os scripts PowerShell continuam disponíveis para quem prefere a linha de comando.
+- Windows com PowerShell 7;
+- Python 3.11 ou superior;
+- Git;
+- um projeto Git existente, separado da instalação master do Galaxy.
 
-Importação copia arquivos; não importa ZIP automaticamente, histórico Git, `.git`, ambientes virtuais,
-`node_modules`, caches ou arquivos `.env` pessoais. Modelos `.env.example`, `.env.sample` e `.env.template`
-são preservados. Outras credenciais não são detectadas automaticamente. Descompacte arquivos ZIP antes.
-Diretórios vazios são preservados; erro de leitura interrompe a importação. Configurações conflitantes bloqueiam a operação e a nova pasta
-temporária é removida; a origem permanece intacta. O menu não mescla arquivos em projetos existentes,
-não inicializa Git nem faz uploads. Para continuar um clone com histórico, use a opção 3 na pasta original.
+O núcleo usa a biblioteca padrão do Python. Integrações externas continuam sujeitas à autenticação, disponibilidade e limites dos respectivos serviços.
 
-## Como organizar
+## Quickstart
 
-```text
-C:\AI\                            ← pasta organizadora em todos os PCs
-  Codex-Multicontroller\           ← pacote mestre
-    scripts\  lib\  presets\  template\  coop\  docs\  tests\
-    local\operator.toml            ← identidade criada apenas neste PC
-  Projetos\
-    MeuProjeto\                   ← repositório independente
-      .codex\  .agents\  .multicontroller\  AGENTS.md  AGENT_TEAM.yml
-      src\  tests\  ...
-    OutroProjeto\                 ← outro repositório independente
-```
-
-O instalador não altera `~/.codex/config.toml`, login, trust ou configurações globais.
-`AI` é apenas a pasta organizadora: abra cada projeto individualmente no Codex e mantenha
-um repositório Git por projeto. Não crie uma configuração `.codex`/`AGENTS.md` comum em `AI`.
-Mestre e projetos são pastas irmãs; nenhum projeto fica dentro do mestre. Use esse mesmo
-padrão nos dois PCs, com identidade local própria. A letra da unidade pode variar se necessário.
-Cada projeto recebe uma cópia versionada da skill; atualizar o mestre não muda projetos automaticamente.
-`AGENT_TEAM.yml` usa JSON, um subconjunto válido de YAML, para dispensar dependências de parsing.
-
-## Instalar em projeto SOLO
-
-Requisitos: Windows, PowerShell 7.4+, Python 3.11+ no PATH, Codex com os modelos desejados.
-Git é necessário para branches/worktrees; use um repositório com commit inicial antes de delegar escritores.
-No PowerShell, a partir da pasta mestre:
+Execute os comandos a partir da raiz deste repositório. O exemplo usa `C:\AI\Projetos\MeuProjeto` como projeto de produto.
 
 ```powershell
-# Crie antes a pasta do projeto, fora do mestre.
-.\scripts\install.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto' -Mode SOLO -Preset balanced -WhatIf
-.\scripts\install.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto' -Mode SOLO -Preset balanced
-.\scripts\validate.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto'
+python .\galaxy.py --help
+
+# Mostra o que seria instalado, sem alterar o projeto.
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --check
+
+# Instala as declarações V2 e gera o adaptador Codex local.
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced
+
+# Confere configuração e artefatos gerados.
+python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto
+python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto --json
 ```
 
-`-WhatIf` lista alterações sem gravar. O instalador recusa sobrescrever configurações existentes diferentes.
-Em projeto com AGENTS/config anteriores, faça uma integração revisada dos templates; não renomeie nem apague
-regras úteis só para contornar a recusa. `-Python 'C:\caminho\python.exe'` seleciona outro interpretador.
-
-Abra o projeto no Codex. Confirme confiança e permissões pelo próprio aplicativo, sem copiar credenciais.
-Comece com: “Use multicontroller. Leia o projeto, crie um contrato delimitado e confirme modelo/effort
-efetivos antes de despachar um Worker.” A skill pode ser descoberta automaticamente pelo Codex.
-
-Antes de considerar o projeto validado, configure `.multicontroller/checks.json` com comandos reais:
-
-```json
-{"commands": [["python", "-m", "unittest", "discover", "-s", "tests", "-v"]]}
-```
-
-Esse exemplo serve somente para projeto Python que tenha testes de produto. Cada comando é array de
-argumentos, sem concatenação de shell. Para npm no Windows, use o executável adequado ao ambiente
-ou um script PowerShell explicitamente revisado. O gate vazio falha intencionalmente.
-
-```powershell
-.\scripts\validate.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto' -ProductGate
-```
-
-## CO-OP: responsáveis equivalentes
-
-Pode começar sozinho e adicionar parceiros depois. Qualquer ID em `integration_operators` pode
-assumir, retomar e integrar tarefas sem esperar outro computador. Nenhuma divisão de contribuição é imposta.
-Os agentes rodam no Codex; operações curtas de coordenação/merge rodam em uma fila no GitHub Actions.
-O job ativo ocupa temporariamente o papel de Integration Lead; não há uma pessoa fixa nesse papel.
-
-Configure os logins em `operators`, autorize seus IDs em `integration_operators` e configure
-`coordination.control_issue` com o número de uma Issue de estado. Exemplo de campos públicos:
+Antes de usar o gate, configure comandos reais do produto em `.galaxy/checks.json`:
 
 ```json
 {
-  "operators": [
-    {"id": "one", "github_login": "SEU_LOGIN"},
-    {"id": "two", "github_login": "LOGIN_DO_COLEGA"}
+  "commands": [
+    ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
   ],
-  "integration_operators": ["one", "two"]
+  "schema_version": 1
 }
 ```
 
-Use esses campos no AGENT_TEAM completo instalado. Uma lista com apenas você também é válida.
-O workflow `multicontroller-control` recebe pedidos JSON via Run workflow/gh. Ele serializa claims,
-retomadas, releases e merges, valida ator/version/nonce e registra recibo no corpo da Issue.
-Leia [COOP-BOOTSTRAP.md](docs/COOP-BOOTSTRAP.md) para habilitar a fila, permissões e recuperação.
-
-O mesmo ZIP é distribuído a todos; cada PC mantém sua própria `local/operator.toml` fora do Git.
-Cross-review entre pessoas é opcional. Agente revisor em contexto independente, testes e escopos
-continuam obrigatórios. Branches/PRs antigos não podem ser integrados fora do coordenador.
-Não há garantia contra administrador que burle o protocolo ou edite o estado manualmente.
-
-## Presets
-
-| | balanced | critical |
-|---|---|---|
-| Root inicial | Sol High | Astra High |
-| Execução | Luna Medium/High | handoff explícito para Sol High + Luna |
-| Subagentes locais máximos | 3 | 2 |
-| Tentativas totais por tarefa | 4 | 5 |
-| Tempo por tarefa | 45 min | 60 min |
-| Revisão | Sol High independente | Sol High + Astra High final |
-
-As configurações são intenções de roteamento, não comprovante de disponibilidade ou execução de modelos.
-Verifique cada conta/host; o Codex pode aplicar políticas superiores. Não há Max/Ultra automático.
-
-## Ferramentas de apoio
+Então execute:
 
 ```powershell
-python .\lib\multicontroller.py decide .\docs\examples\history.json --preset balanced
-python .\lib\multicontroller.py usage .\docs\examples\usage.json
-python .\lib\multicontroller.py grant .\docs\examples\grant.json
-python .\lib\multicontroller.py gate .\docs\examples\gate.json
-python .\lib\multicontroller.py reclaim .\docs\examples\reclaim.json
-python -m unittest discover -s tests -v
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto --gate
 ```
 
-Os exemplos são dados demonstrativos, não evidência real. `grant` valida um snapshot para o lead; não cria
-lock remoto. `gate` confere evidência fornecida; não consulta/autentica GitHub. `decide` recomenda;
-o root interrompe e despacha agentes. `reclaim` é helper legado 1.2 para planejar retomada; o CO-OP atual usa o workflow;
-não altera permissões remotas. `reputation <events.json>` gera propostas e nunca reescreve política.
-Projetos recebem as ferramentas em `.multicontroller/tools/`.
+O gate falha de propósito quando `commands` está vazio. Veja [Instalação](docs/INSTALLATION.md) e [Validação](docs/VALIDATION.md).
 
-## Atualizar e reverter
+## Layout de um projeto V2
 
-Leia diff/changelog da nova release. Faça backup/commit do projeto. Rode `scripts/update.ps1 -ProjectPath ... -WhatIf`
-e depois sem `-WhatIf`. Arquivos gerenciados com alterações locais bloqueiam upgrade; resolva por PR/review.
-Identidades e comandos do produto são preservados. Schema 1/2 migra para schema 3, incluindo os
-operadores cadastrados como integradores equivalentes. Confira a lista no diff; remova quem não deve
-ter essa autoridade. `integration_lead` antigo é ignorado. Configure a Issue/fila antes de usar o novo CO-OP.
-Migração exige encerrar ou importar claims antigos e desativar caminhos de merge fora do coordenador.
-Regras remotas não são alteradas pelo instalador. Backups ficam em `local/backups/` do mestre.
-Mudança SOLO↔CO-OP exige migração revisada, sem remoção automática de arquivos. Reversão preferida: revert do
-PR de atualização; alternativamente compare/restaure o backup explicitamente, sem apagar trabalho novo.
+```text
+MeuProjeto/
+├── AGENTS.md                         # instruções estáveis do projeto
+├── galaxy.lock                       # versão e revisões reproduzíveis
+├── .galaxy/
+│   ├── project.yml                   # adaptador, routing, specialists e vault
+│   ├── team.yml                      # modo e política de coordenação
+│   └── checks.json                   # comandos reais do produto
+├── .github/workflows/
+│   └── galaxy-validate.yml           # gate reproduzível no GitHub
+└── .codex/                           # saída local gerada; não versionada
+```
 
-## O que foi verificado
+`AGENTS.md`, `.galaxy/`, `galaxy.lock` e o workflow são declarações versionadas. `.codex/`, `.galaxy/local/`, `.galaxy/runtime/`, `.galaxy/cache/` e `.galaxy/install/` são locais ou gerados. O bootstrap recusa drift em arquivos gerados em vez de sobrescrever customizações silenciosamente.
 
-Consulte [VALIDATION.md](docs/VALIDATION.md) para testes, pressure scenarios e limites reais da release.
-Nenhum repositório GitHub foi fornecido: regras remotas, grants em duas contas e disponibilidade de modelos
-precisam do smoke test de ativação. O pacote oferece protocolo e ferramentas; não é um sistema distribuído
-que imponha exclusividade contra colaboradores com acesso de escrita.
+## SOLO e CO-OP
 
-Leitura de auditoria: [SPEC V1](docs/SPEC-V1.md), [findings corrigidos](docs/ARCHITECTURE-REVIEW.md),
-[fontes e compatibilidade](docs/SOURCES.md), [aprendizado](template/.agents/skills/multicontroller/references/learning.md).
+`SOLO` usa backend local e mantém as garantias de branch protegida, checks do produto e revisão independente configurada:
+
+```powershell
+python .\galaxy.py init C:\AI\Projetos\Solo --mode SOLO --preset balanced
+```
+
+`CO-OP` grava em `.galaxy/team.yml` a coordenação serializada e o check requerido `galaxy / validate`:
+
+```powershell
+python .\galaxy.py init C:\AI\Projetos\Equipe --mode CO-OP --preset critical
+```
+
+O modo preserva as garantias V1 de um escritor por escopo, revisão independente, dependências em DAG e merge condicionado. A declaração local não cria credenciais, regras de branch ou recursos no GitHub. A ativação remota exige configuração explícita; veja [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md).
+
+## Modelos, routing e quota
+
+O adaptador Codex gerado usa **Sol Medium** (`gpt-5.6-sol`, esforço `medium`) para o root normal. Papéis de leitura e execução limitada podem usar Luna; revisão e arquitetura podem usar Sol High. Astra é rota excepcional para problemas que exigem capacidade adicional, não root permanente.
+
+O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`balanced` ou `critical`), disponibilidade observada e quota. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
+
+O Quota Guard reserva por padrão 15% da janela de cinco horas e 2% da janela semanal. Abaixo do piso não inicia novos despachos; interrupção de filhos já em execução é apenas best effort. Limiares são política local do operador e não devem ser gravados no repositório do produto. Se a telemetria não estiver disponível, o Doctor informa `UNKNOWN`; disponibilidade desconhecida não equivale a quota infinita.
+
+## Papéis e especialistas
+
+Papel, especialista, modelo e ferramenta são dimensões independentes:
+
+- o **papel** define autoridade;
+- o **especialista** fornece instruções e recursos do domínio;
+- o **modelo/esforço** é escolhido pelo router;
+- a **capability** determina quais ações estão realmente disponíveis.
+
+Especialistas têm fonte Markdown com frontmatter, catálogo frio e hot set materializado sob demanda. A saída do adaptador é determinística e não amplia autoridade. Para inspecionar ou sincronizar:
+
+```powershell
+python .\galaxy.py specialists list
+python .\galaxy.py specialists sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py specialists sync C:\AI\Projetos\MeuProjeto
+```
+
+## Bootstrap, Doctor e ciclo de vida
+
+O bootstrap deriva `.codex/` das declarações do projeto. `--check` detecta criação, atualização, remoção ou drift pendente sem aplicar mudanças.
+
+O Galaxy Doctor verifica configuração, lock, consistência do bootstrap, poluição Git, resíduos V1, checks, runtime, quota, capabilities de ação, Vault e ciclo de vida. `WARN`/`UNKNOWN` não são convertidos artificialmente em sucesso; `FAIL` retorna código diferente de zero.
+
+O Lifecycle Manager apresenta um plano antes de remover candidatos inativos. Ele reconhece branches novas `galaxy/*` e branches históricas `codex/*`, preservando itens ativos ou inseguros:
+
+```powershell
+python .\galaxy.py cleanup C:\AI\Projetos\MeuProjeto --preview
+python .\galaxy.py cleanup C:\AI\Projetos\MeuProjeto --apply
+```
+
+Revise o preview antes de `--apply`.
+
+## Migração V1 para V2
+
+A migração é semântica: classifica arquivos do projeto, arquivos Galaxy intactos e arquivos Galaxy modificados; não faz substituição global de texto. O preview não altera o projeto:
+
+```powershell
+python .\galaxy.py migrate C:\AI\Projetos\Legado --preview
+python .\galaxy.py migrate C:\AI\Projetos\Legado
+```
+
+Antes da primeira mutação, o motor cria backup fora do projeto, em `local/migrations/` da instalação master, e registra um receipt com hashes, estado do índice Git, transformações, preservações, conflitos, validação e Doctor. Conflitos bloqueiam a finalização. Para desfazer, use o caminho de receipt retornado:
+
+```powershell
+python .\galaxy.py migrate C:\AI\Projetos\Legado --rollback C:\caminho\para\receipt.json
+```
+
+Conteúdo não pertencente ao Galaxy sob `.agents/` é preservado. Um Vault encontrado no projeto V1 entra apenas no inventário e não é modificado pela migração. Consulte [SPEC V1](docs/SPEC-V1.md) para o formato histórico e [SPEC V2](docs/SPEC-V2.md) para o contrato atual.
+
+## Action Resolver e Resource Catalog
+
+O Action Resolver escolhe, em ordem padrão, capability nativa/aplicativo conectado, connector ou plugin, CLI, API e navegador. Fallback pelo navegador exige aprovação explícita. A seleção é uma API interna; não existe comando `galaxy action` na CLI atual.
+
+O Resource Catalog é local, compacto e determinístico. `registry/resources.json` começa com poucas fontes verificadas. Conteúdo do projeto `public-apis` pode ser importado somente de arquivo ou string local como candidatos `unverified`; o importador não acessa a rede, não transforma essa lista em fonte de verdade e não injeta READMEs completos. O catálogo também é API interna nesta versão.
+
+## Obsidian Vault opcional
+
+O Vault fica **desativado por padrão** em `.galaxy/project.yml`. Quando ativado pelo proprietário do projeto, ele projeta tarefas, marcos e resumos em Markdown. Prompts, respostas, telemetria e segredos ficam excluídos por padrão; o Obsidian não é requisito para operar o Galaxy.
+
+```powershell
+python .\galaxy.py vault status C:\AI\Projetos\MeuProjeto
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto
+```
+
+Snapshots adicionais podem ser fornecidos com `--snapshot ARQUIVO`; a origem precisa ser um JSON local. `--force` só deve ser usado depois de revisar conflitos de propriedade. Detalhes de modos e privacidade estão no [SPEC V2](docs/SPEC-V2.md).
+
+## Compatibilidade e limites
+
+- `multicontroller.py` é um wrapper temporário com aviso de depreciação; novos fluxos usam `galaxy.py`.
+- `.multicontroller/`, `AGENT_TEAM.yml`, `.multicontroller/tools` e metadados V1 são aceitos apenas em migração/compatibilidade.
+- Projetos novos usam `.galaxy/` e não vendorizam ferramentas do master.
+- Provedores LLM gratuitos externos não fazem parte da versão 2.0.0.
+- O Galaxy não concede credenciais, quota, permissões do GitHub ou acesso a modelos.
+- Renomeação do repositório, rulesets, smoke test Lexy e suíte final precisam de evidência própria; esta documentação não os declara concluídos.
+
+## Documentação
+
+- [Especificação V2](docs/SPEC-V2.md)
+- [Instalação](docs/INSTALLATION.md)
+- [Validação](docs/VALIDATION.md)
+- [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md)
+- [Publicação](docs/PUBLISH.md)
+- [Fontes](docs/SOURCES.md)
+- [Changelog](docs/CHANGELOG.md)
+- [Especificação V1 histórica](docs/SPEC-V1.md)
+
+Licença: [MIT](LICENSE).

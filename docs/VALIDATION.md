@@ -1,62 +1,132 @@
-# Verificação final da release 1.3.0
+# Validação do Galaxy Orchestrator V2
 
-2026-09-10 · Windows · Python 3.14 local · PowerShell 7 · Codex CLI 0.153.4.
+Esta página separa verificações executáveis de alegações de release. A documentação não substitui os resultados da suíte final, do smoke test Lexy ou da publicação no GitHub.
 
-Release 1.2: seis novos testes RED→GREEN de CO-OP com um operador, Reviewer independente,
-retomada sem ACK, recusa de retomada sem fencing/autorização e migração da política.
-Evidência GitHub é fornecida pelo root; o helper não modifica o servidor.
+## Validação de um projeto
 
-Version 1.3: 11 testes de coordenação com transporte simulado: autoridade simétrica, conflitos, replay,
-revocation, merge serial, erro após merge, recuperação por outro operador, head alterado/fechado e
-preservação de dependências. Não são testes live do GitHub Actions. Ativação ainda precisa de smoke test.
+Execute da raiz do Galaxy:
 
-## Evidência executável
+```powershell
+python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto
+python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto
+```
 
-Comando: `python -m unittest discover -s tests -v`, na raiz do pacote.
-Resultado: **52 testes passaram, zero falhas, zero skips**.
+Resultados esperados:
 
-Release 1.1: oito testes novos RED→GREEN para criação/importação, preservação da origem,
-recusa de destino existente, nomes inválidos e rollback após conflito. `Iniciar.bat` também foi
-executado no Windows para verificar abertura e saída do menu. A execução automatizada não simula
-um duplo clique físico; confirma o mesmo launcher via cmd.
-Revisão independente acrescentou regressões para pastas vazias e origem ilegível; ambas corrigidas.
+- `bootstrap --check` sem `create`, `update`, `removed` ou `drift` pendentes;
+- `validate` com configuração válida e versão do lock compatível;
+- Doctor sem `FAIL`; `WARN` e `UNKNOWN` devem ser lidos, não escondidos.
 
-- RED inicial: 13 testes falharam porque o engine não existia. GREEN após implementação.
-- RED instalador: 8 testes falharam porque instalador não existia. GREEN após implementação.
-- Regressões da revisão: 4 testes falharam para modo/scope/base/identidade/lock; corrigidos.
-- Regressões finais: trailing `//` e evidência de custo falharam; corrigidos.
-- Windows: preview e instalação PowerShell reais; paths com espaço/ação; junction real recusada.
-- Upgrade: idempotência, conflito de arquivo, preservação de dados, rollback após erro de escrita simulado.
-- Gates: falta de comando de produto falha; comando com exit 0 passa; exit 7 falha.
-- Testes não chamam modelos, não usam credentials e não publicam no GitHub.
+Para executar checks reais do produto:
 
-## Rastreabilidade da SPEC
+```powershell
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto --gate
+```
 
-| Requisito | Artefatos | Verificação / limite |
-|---|---|---|
-| R01 separação mestre/global/projeto | installer, README, manifest | paths separados; global nunca escrito |
-| R02 modos e identidade | AGENT_TEAM, operator.example, bootstrap | modos instalados; login casefold; identidade local manual |
-| R03 roles e routing | 6 TOMLs, 2 presets, skill | parsing de role refs; modelo efetivo exige smoke test |
-| R04 contrato/DAG/ownership | contract reference, check_dag, overlap | ciclo/ID ausente/conflito recusados; worktree pelo root |
-| R05 adaptive | decide + skill | budgets, fresh, escalation, infra, quarantine; root aplica |
-| R06 learning | reputation, learning reference | dedup, janela, proposta, cheap evidence; PR/review via protocolo |
-| R07 claims | coordinator, workflow, remote reference | fila serial, versões, replay, retomada e recuperação simulados; ativação GitHub pendente |
-| R08 Git/comunicação | namespace, 8 mensagens, bootstrap | pressure scenarios; push/merge não executados |
-| R09 CI/PR | gate, workflow, templates | head/base/revision/current checks; rulesets reais pendentes de ativação |
-| R10 uso | usage, examples, learning | delta/dedup/cache/null; sem coletor automático de logs pessoais |
-| R11 Windows | PowerShell + installer | instalação/preview/junction/drift/rollback |
-| R12 artefatos e auditoria | docs, tests, release hashes | auditoria independente + pressure results |
+O gate exige pelo menos um comando em `.galaxy/checks.json`. Cada comando é executado como vetor de argumentos no diretório do projeto, sem concatenação de shell, com timeout. Lista vazia, timeout ou código diferente de zero bloqueiam o gate.
 
-## Limites preservados
+## Interpretação do Doctor
 
-Não foi fornecido um repositório alvo nem identidades GitHub reais. Não executamos grants/PRs em duas
-contas, verificamos rulesets reais ou despachamos Luna/Sol/Astra para comprovar disponibilidade.
-O roteiro de ativação por PC está em COOP-BOOTSTRAP.md. CI deve receber comandos reais do produto.
-Seu gate vazio falha deliberadamente; validação de configuração sozinha não declara produto aprovado.
+O Doctor cobre:
 
-O validador auxiliar de skills do host dependia de PyYAML, ausente nos dois Python disponíveis. Não foi
-instalada dependência global para contornar isso. Frontmatter/referências foram inspecionados diretamente
-e a skill passou pelos testes comportamentais documentados, que não dependem desse auxiliar.
+```text
+configuração e galaxy.lock
+consistência dos arquivos gerados
+arquivos gerados rastreados pelo Git
+resíduos V1
+checks do produto
+modelo/esforço de runtime
+quota
+capability para ações externas
+Vault
+ciclo de vida de branches, worktrees e runtime
+```
 
-Protocolo cooperativo depende de um lead único e de operadores confiáveis; Markdown não impõe exclusão.
-Não há daemon, live auto-learning global ou contabilização automática de cotas de duas contas.
+Use JSON em automação:
+
+```powershell
+python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto --json
+if ($LASTEXITCODE -ne 0) { throw 'Galaxy Doctor encontrou falhas' }
+```
+
+Telemetria ausente deve aparecer como `UNKNOWN`. Um runtime diferente do solicitado deve ser classificado como mismatch de roteamento, não como falha genérica do modelo. Browser disponível sem aprovação não satisfaz silenciosamente uma capability externa.
+
+## Bootstrap reproduzível
+
+Em clone limpo do projeto:
+
+```powershell
+git clone <URL-DO-PROJETO> C:\Temp\MeuProjeto
+python .\galaxy.py bootstrap C:\Temp\MeuProjeto
+python .\galaxy.py bootstrap C:\Temp\MeuProjeto --check
+python .\galaxy.py validate C:\Temp\MeuProjeto --gate
+```
+
+O segundo comando precisa ser idempotente. Confirme também:
+
+```powershell
+git -C C:\Temp\MeuProjeto status --short
+git -C C:\Temp\MeuProjeto ls-files .codex .galaxy/local .galaxy/runtime .galaxy/cache .galaxy/install
+```
+
+Nenhum arquivo gerado/local deve aparecer rastreado. As declarações `.galaxy/`, `AGENTS.md`, `galaxy.lock` e o workflow devem permanecer versionadas.
+
+## Migração V1.3
+
+Use primeiro uma cópia controlada ou fixture:
+
+```powershell
+python .\galaxy.py migrate C:\Temp\ProjetoV1 --preview
+python .\galaxy.py migrate C:\Temp\ProjetoV1
+python .\galaxy.py doctor C:\Temp\ProjetoV1 --json
+```
+
+Verifique no receipt:
+
+- inventário e hashes anteriores;
+- classificação de conteúdo do projeto, Galaxy intacto e Galaxy modificado;
+- itens transformados, preservados, gerados, retirados do índice e conflitantes;
+- resultados separados de Git/untrack, bootstrap, validação e Doctor;
+- backup externo ao projeto;
+- dados suficientes para restaurar bytes e índice Git.
+
+Teste rollback com o receipt produzido e compare árvore de trabalho e índice com o estado original. A migração não deve tocar um Vault V1 nem apagar conteúdo não Galaxy em `.agents/`.
+
+O smoke test do projeto Lexy é um critério final separado. Só marque como concluído depois de executá-lo e registrar o receipt e o resultado; esta revisão documental não o executa.
+
+## Lifecycle e ações externas
+
+```powershell
+python .\galaxy.py cleanup C:\AI\Projetos\MeuProjeto --preview
+```
+
+O plano deve preservar branches/worktrees ativos, itens sem prova de propriedade e runtime recente. Execute `--apply` somente após revisão humana do preview.
+
+Para operações GitHub, valide que o Action Resolver seleciona capability nativa/conectada, connector/plugin, CLI ou API antes de navegador. Browser exige aprovação explícita e não comprova que a ação externa ocorreu.
+
+## Suíte do repositório
+
+Com o checkout parado e sem outros agentes alterando arquivos:
+
+```powershell
+python -m compileall -q lib tests galaxy.py multicontroller.py
+python -m unittest discover -s tests -v
+git diff --check
+git status --short
+```
+
+Também execute as suítes focadas de routing/quota, runtime/review, specialists, bootstrap, migration, doctor/actions, lifecycle, resources e vault quando uma dessas áreas mudar.
+
+## Estado de aceitação desta documentação
+
+No momento desta atualização:
+
+- a documentação descreve a arquitetura e a CLI V2 presentes no checkout;
+- os testes focados pertencem aos respectivos relatórios de implementação;
+- a suíte final completa ainda precisa ser executada após a integração de todas as mudanças concorrentes;
+- o smoke test Lexy ainda precisa de evidência final;
+- a renomeação local e a renomeação do repositório GitHub ainda precisam ser verificadas;
+- a proteção `galaxy / validate` ainda precisa ser confirmada no repositório publicado.
+
+Não substitua esta lista por números antigos da linha V1.3. Registre comando, commit, ambiente, duração e saída de cada execução final.

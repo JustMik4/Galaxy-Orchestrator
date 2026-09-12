@@ -1,64 +1,146 @@
-# Galaxy Orchestrator V2 — instalação e migração
+# Instalação do Galaxy Orchestrator V2
 
-Este guia instala o runtime local do Galaxy em projetos independentes. O mestre e cada projeto são árvores separadas; o instalador não altera `~/.codex`, login, trust, permissões globais ou credenciais.
+O master do Galaxy e o projeto de produto são diretórios distintos. O instalador grava declarações pequenas no projeto e gera o adaptador local a partir delas; não copia a implementação inteira do master.
 
-## Requisitos
+## Pré-requisitos
 
-Windows, PowerShell 7.4+, Python 3.11+ e Git para projetos versionados/CO-OP. `gh` ou connector GitHub é opcional. Não é necessário instalar dependências Python adicionais.
+- Windows e PowerShell 7;
+- Python 3.11+;
+- Git;
+- projeto existente, preferencialmente já versionado;
+- checkout local do Galaxy Orchestrator.
 
-## Projeto novo ou existente
+Durante a transição, o checkout de desenvolvimento pode continuar em `C:\AI\Codex-Multicontroller`. O caminho canônico `C:\AI\Galaxy-Orchestrator` só deve ser adotado depois do procedimento de [publicação](PUBLISH.md).
 
-Use a pasta mestre para executar preview, instalação e validação:
+## Instalação nova
+
+Abra PowerShell na raiz do Galaxy. Primeiro faça uma simulação:
 
 ```powershell
-.\scripts\install.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto' -Mode SOLO -Preset balanced -WhatIf
-.\scripts\install.ps1 -ProjectPath 'C:\AI\Projetos\MeuProjeto' -Mode SOLO -Preset balanced
-python .\galaxy.py doctor --project 'C:\AI\Projetos\MeuProjeto'
-python .\galaxy.py validate --project 'C:\AI\Projetos\MeuProjeto'
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --check
 ```
 
-V2 cria `.galaxy/project.yml`, `.galaxy/team.yml`, `.galaxy/checks.json` e `galaxy.lock`. `.codex/`, runtime, cache, install e ferramentas geradas são locais/não rastreados. O projeto deve manter seus próprios comandos de produto em `.galaxy/checks.json`; lista vazia falha deliberadamente.
+Se o plano estiver correto, aplique:
 
-Para continuar um clone existente, faça backup/commit e rode `-WhatIf`. Drift em arquivo gerenciado bloqueia overwrite. Resolva por integração revisada; não apague regras úteis para contornar o preflight.
-
-## Vault opcional do Obsidian
-
-O vault é uma projeção para acompanhar tarefas, milestones e resumos. Ative em `.galaxy/project.yml`:
-
-```yaml
-vault:
-  enabled: true
-  path: .galaxy/vault
-  mode: projection
-  sync: manual
-  include: [tasks, milestones, summaries]
-  exclude: [prompts, responses, telemetry, secrets]
+```powershell
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced
 ```
 
-Para um vault externo, mantenha o caminho apenas em `.galaxy/local/operator.toml`; não rastreie caminhos pessoais. Execute `galaxy vault status` e `galaxy vault sync --check` antes de gravar. A projeção é determinística e contém task ID, revision, status, owner e receipt, nunca prompts, respostas, tokens, credenciais ou `.env`. O estado CO-OP continua no coordenador serializado; uma nota não pode criar claim, liberar dependência ou integrar PR.
+`init` é um alias para a mesma instalação V2:
 
-Edições humanas devem ser feitas em notas `project-owned` explicitamente declaradas. Drift em projeções bloqueia sync por padrão; `--force` exige backup e confirmação. Conflitos project-owned preservam os dois lados e exigem resolução manual. Não há merge automático por LLM.
+```powershell
+python .\galaxy.py init C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced
+```
+
+O wrapper PowerShell também pode ser usado:
+
+```powershell
+.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced -WhatIf
+.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced
+```
+
+`--check` na CLI e `-WhatIf` no wrapper não alteram o projeto. Os presets disponíveis são `balanced` e `critical`; os modos são `SOLO` e `CO-OP`.
+
+## O que é instalado
+
+Arquivos versionados:
+
+```text
+AGENTS.md
+galaxy.lock
+.galaxy/project.yml
+.galaxy/team.yml
+.galaxy/checks.json
+.github/workflows/galaxy-validate.yml
+```
+
+Arquivos locais ou gerados:
+
+```text
+.codex/
+.galaxy/local/
+.galaxy/runtime/
+.galaxy/cache/
+.galaxy/install/
+```
+
+O instalador registra exclusões locais em `.git/info/exclude` quando o projeto é Git. Ele não deve adicionar toda `.agents/` ao ignore, porque esse diretório pode conter material do próprio projeto.
+
+O bootstrap é determinístico. Se um destino gerado existente divergir da saída esperada, a operação relata drift e preserva a cópia do usuário.
+
+## Configuração mínima
+
+Edite `.galaxy/project.yml` para selecionar routing, especialistas e, se desejado, Vault. Edite `.galaxy/team.yml` para política da equipe. Configure checks reais como vetores de argumentos em `.galaxy/checks.json`:
+
+```json
+{
+  "commands": [
+    ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
+  ],
+  "schema_version": 1
+}
+```
+
+Vetores evitam dependência de parsing de shell. Não grave segredos nesses arquivos.
+
+## Bootstrap e validação
+
+```powershell
+python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto
+python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto --json
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto --gate
+```
+
+Use o primeiro `bootstrap --check` para inspecionar drift. `validate` confere declarações, lock e geração. `validate --gate` também executa os comandos do produto e bloqueia se a lista estiver vazia.
 
 ## CO-OP
 
-Configure operadores e a Issue de controle em `.galaxy/team.yml`; cada PC mantém sua identidade em `local/operator.toml`, fora do Git. O workflow V2 é `galaxy-control`/`galaxy-validate.yml` conforme o pacote instalado. Claims, releases e merges usam a fila serializada, revisions e receipts. Consulte `docs/COOP-BOOTSTRAP.md` para permissões e smoke test; testes locais não comprovam regras remotas ou disponibilidade de modelos em outra conta.
-
-## Migração V1 → V2
-
 ```powershell
-python .\galaxy.py migrate --project 'C:\AI\Projetos\MeuProjeto' --what-if
-python .\galaxy.py migrate --project 'C:\AI\Projetos\MeuProjeto'
-python .\galaxy.py doctor --project 'C:\AI\Projetos\MeuProjeto'
+python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical --check
+python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical
 ```
 
-A migração é semântica e restartável: preview, preflight, backup fora do projeto, aplicação, validação e receipt. Converte `AGENT_TEAM.yml` para `.galaxy/team.yml`, `.multicontroller/` para `.galaxy/` e workflows/checks para nomes Galaxy. Arquivos modificados pelo usuário, links/reparse points, secrets e conflitos bloqueiam a operação sem destruir conteúdo. Vaults encontrados são apenas inventariados; o usuário escolhe projeção ou declarations `project-owned`.
+A instalação grava a política CO-OP e o workflow de validação, mas não cria credenciais, issue de controle, ruleset ou permissões no GitHub. Complete o procedimento em [CO-OP-BOOTSTRAP.md](COOP-BOOTSTRAP.md).
 
-O rename físico de `C:\AI\Codex-Multicontroller` para `C:\AI\Galaxy-Orchestrator` só ocorre após parar shells/processos, registrar estado limpo e repetir testes + Doctor. Branches publicados `codex/*` não são renomeados automaticamente.
+## Migração de projeto V1.3
 
-## Verificação
+Não mova pastas V1 manualmente e não substitua nomes em massa. Execute:
 
 ```powershell
-python -m unittest discover -s tests -v
+python .\galaxy.py migrate C:\AI\Projetos\Legado --preview
+python .\galaxy.py migrate C:\AI\Projetos\Legado
 ```
 
-Consulte [PHASE-0-BASELINE.md](PHASE-0-BASELINE.md), [SPEC-V2.md](SPEC-V2.md) e [VALIDATION.md](VALIDATION.md) para evidências, limites e critérios. Nenhum comando de instalação publica dados nem inicializa Git automaticamente.
+O motor detecta manifest, team, policy e checks V1.3; classifica conteúdo do projeto e conteúdo Galaxy intacto ou modificado; cria um backup sob `local/migrations/` do master; transforma declarações; executa bootstrap, validação e Doctor; e registra um receipt durável. Arquivos gerados só são retirados do índice Git quando comprovadamente pertencem ao manifest, sem apagar a cópia de trabalho.
+
+Conflitos ou falhas interrompem a finalização e restauram bytes e índice Git quando possível. Para rollback posterior, use exatamente o receipt retornado:
+
+```powershell
+python .\galaxy.py migrate C:\AI\Projetos\Legado --rollback C:\caminho\para\receipt.json
+```
+
+A operação é reiniciável e idempotente. Conteúdo misto em `.agents/` é preservado. Vault V1 entra apenas no inventário.
+
+## Obsidian Vault
+
+O bloco `vault` começa com `enabled: false`. Para optar pela projeção, o proprietário edita `.galaxy/project.yml`, escolhe um diretório e mantém as exclusões de privacidade. Depois:
+
+```powershell
+python .\galaxy.py vault status C:\AI\Projetos\MeuProjeto
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto
+```
+
+O Obsidian é consumidor opcional dos arquivos Markdown; não é dependência do Galaxy.
+
+## Atualização e reversão
+
+1. preserve `galaxy.lock` e as declarações versionadas;
+2. atualize o master do Galaxy por um ref exato e revisado;
+3. atualize versão/revisão no lock apenas como mudança consciente;
+4. execute `bootstrap --check`, `validate`, `doctor` e os checks do produto;
+5. reverta a mudança no lock se a validação falhar.
+
+Não dependa de `main` flutuante em CI. O workflow V2 aceita um SHA de 40 caracteres ou a tag exata `v<versão>` registrada no lock.
