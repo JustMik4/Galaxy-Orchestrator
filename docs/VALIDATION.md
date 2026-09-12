@@ -8,6 +8,7 @@ Execute da raiz do Galaxy:
 
 ```powershell
 python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto --check
 python .\galaxy.py validate C:\AI\Projetos\MeuProjeto
 python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto
 ```
@@ -15,6 +16,7 @@ python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto
 Resultados esperados:
 
 - `bootstrap --check` sem `create`, `update`, `removed` ou `drift` pendentes;
+- `lock sync --check` com status `current`; status `stale` exige revisar as quatro declarações antes de sincronizar;
 - `validate` com configuração válida e versão do lock compatível;
 - Doctor sem `FAIL`; `WARN` e `UNKNOWN` devem ser lidos, não escondidos.
 
@@ -72,6 +74,8 @@ git -C C:\Temp\MeuProjeto ls-files .codex .galaxy/local .galaxy/runtime .galaxy/
 
 Nenhum arquivo gerado/local deve aparecer rastreado. As declarações `.galaxy/`, `AGENTS.md`, `galaxy.lock` e o workflow devem permanecer versionadas.
 
+Em Windows, repita o clone com `core.autocrlf=true`. `load_project`, Doctor e bootstrap precisam aceitar os mesmos bytes; o bloco Galaxy ao final de `.gitattributes` deve prevalecer sobre regras globais conflitantes.
+
 ## Migração V1.3
 
 Use primeiro uma cópia controlada ou fixture:
@@ -93,7 +97,7 @@ Verifique no receipt:
 
 Teste rollback com o receipt produzido e compare árvore de trabalho e índice com o estado original. A migração não deve tocar um Vault V1 nem apagar conteúdo não Galaxy em `.agents/`.
 
-O smoke test do projeto Lexy é um critério final separado. Só marque como concluído depois de executá-lo e registrar o receipt e o resultado; esta revisão documental não o executa.
+O smoke test do projeto Lexy é um critério final separado. Sua evidência mais recente está registrada abaixo; repita-o depois da publicação/renomeação para validar também o limite externo.
 
 ## Lifecycle e ações externas
 

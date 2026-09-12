@@ -24,11 +24,15 @@ Revise `.galaxy/team.yml`. A forma inicial é equivalente a:
 ```json
 {
   "coordination": {
+    "automatic_expiry": false,
     "backend": "github-actions-issue",
+    "capability": "github-actions",
     "claim_protocol": "serialized-workflow",
-    "control_issue": null
+    "control_issue": null,
+    "workflow": ".github/workflows/galaxy-control.yml"
   },
   "integration_branch": "main",
+  "integration_operators": [],
   "mode": "CO-OP",
   "operators": [],
   "required_checks": ["galaxy / validate"],
@@ -48,6 +52,13 @@ Os arquivos têm extensão YAML por contrato de produto, mas o conteúdo V2 atua
 ## 3. Configure operadores e issue de controle
 
 Crie uma única issue de controle no repositório correto. Registre o número em `coordination.control_issue` e liste somente os operadores autorizados em `operators`. Faça essa mudança em branch e revisão normais.
+
+Cada operador precisa de `id` e `github_login`; `integration_operators` contém IDs autorizados a integrar. Depois da revisão, atualize conscientemente os hashes das declarações:
+
+```powershell
+python .\galaxy.py lock sync C:\AI\Projetos\Equipe --check
+python .\galaxy.py lock sync C:\AI\Projetos\Equipe
+```
 
 O protocolo serializado deve preservar:
 
@@ -83,7 +94,7 @@ A renomeação do repositório para `JustMik4/Galaxy-Orchestrator` precisa ocorr
 
 ## 5. Ative o coordenador remoto conscientemente
 
-A distribuição V2 versiona o workflow de **validação**. A mera presença desse workflow não prova que um coordenador remoto serializado está ativo. Antes de operar CO-OP remoto, publique e revise a automação de coordenação compatível com o contrato V2, com permissões mínimas e concorrência por repositório.
+A instalação CO-OP versiona `.github/workflows/galaxy-control.yml`. Ele usa `workflow_dispatch`, concorrência `galaxy-control-v2`, checkout fixado, a revisão exata de `galaxy.lock` e `lib.coordinator`; não usa o runtime V1 vendorizado. Sua presença isolada não prova ativação: enquanto `control_issue`, operadores/integradores, repositório/tag canônicos ou permissões estiverem incompletos, o Doctor falha fechado.
 
 Uma automação de coordenação aceitável deve:
 
@@ -95,7 +106,7 @@ Uma automação de coordenação aceitável deve:
 - registrar resultado inequívoco de claim, heartbeat, finish e reclaim;
 - preservar as regras de gate do produto.
 
-Artefatos históricos sob `coop/` e `.multicontroller/` descrevem ou implementam a linha V1. Não os copie para projetos novos sem uma migração e revisão V2 explícitas.
+Artefatos históricos sob `coop/` e `.multicontroller/` descrevem ou implementam a linha V1. A migração substitui o workflow de controle V1 somente quando sua autoria é comprovada pelo manifesto; cópia ausente do manifesto ou modificada bloqueia a migração para revisão humana.
 
 ## 6. Valide antes do primeiro claim
 
@@ -140,5 +151,6 @@ Branches históricas `codex/*` continuam reconhecidas pelo Lifecycle Manager, ma
 - lease expirado: verifique heartbeat e atividade real antes de reclaim.
 - `.codex/` rastreado: retire apenas caminhos comprovadamente gerados do índice e preserve a cópia local.
 - estado V1: execute `galaxy migrate --preview`; não renomeie diretórios manualmente.
+- declarações alteradas: execute `galaxy lock sync <PROJETO> --check`, revise o diff e só então aplique sem `--check`.
 
 Use `python .\galaxy.py cleanup <PROJETO> --preview` para inspecionar candidatos antigos. Aplique limpeza somente depois de excluir branches/worktrees ativos.

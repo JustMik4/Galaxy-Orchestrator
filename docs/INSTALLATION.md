@@ -46,6 +46,7 @@ O wrapper PowerShell também pode ser usado:
 Arquivos versionados:
 
 ```text
+.gitattributes
 AGENTS.md
 galaxy.lock
 .galaxy/project.yml
@@ -66,6 +67,8 @@ Arquivos locais ou gerados:
 
 O instalador registra exclusões locais em `.git/info/exclude` quando o projeto é Git. Ele não deve adicionar toda `.agents/` ao ignore, porque esse diretório pode conter material do próprio projeto.
 
+O bloco Galaxy no final de `.gitattributes` fixa os quatro arquivos autenticados como bytes literais. Regras existentes do projeto são preservadas; se uma regra posterior for adicionada, uma nova execução de `install` reposiciona o bloco Galaxy no fim de forma determinística.
+
 O bootstrap é determinístico. Se um destino gerado existente divergir da saída esperada, a operação relata drift e preserva a cópia do usuário.
 
 ## Configuração mínima
@@ -82,6 +85,15 @@ Edite `.galaxy/project.yml` para selecionar routing, especialistas e, se desejad
 ```
 
 Vetores evitam dependência de parsing de shell. Não grave segredos nesses arquivos.
+
+Esses arquivos e `AGENTS.md` são autenticados por `galaxy.lock`. Depois de revisar uma alteração intencional, confira e sincronize os hashes explicitamente:
+
+```powershell
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto
+```
+
+`--check` não escreve e retorna código diferente de zero quando há hashes obsoletos. `lock sync` valida os schemas, preserva os demais campos do lock e recusa links, troca concorrente ou declaração inválida antes da escrita atômica.
 
 ## Bootstrap e validação
 
@@ -102,7 +114,7 @@ python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical 
 python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical
 ```
 
-A instalação grava a política CO-OP e o workflow de validação, mas não cria credenciais, issue de controle, ruleset ou permissões no GitHub. Complete o procedimento em [CO-OP-BOOTSTRAP.md](COOP-BOOTSTRAP.md).
+A instalação grava a política CO-OP, o workflow de validação e o workflow de controle serializado, mas não cria credenciais, issue de controle, ruleset ou permissões no GitHub. Complete o procedimento em [CO-OP-BOOTSTRAP.md](COOP-BOOTSTRAP.md) e sincronize o lock depois de revisar `team.yml`.
 
 ## Migração de projeto V1.3
 
@@ -134,6 +146,8 @@ python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto
 ```
 
 O Obsidian é consumidor opcional dos arquivos Markdown; não é dependência do Galaxy.
+
+Para um Vault externo, use apenas `.galaxy/local/operator.toml` com `external = true` e caminho absoluto. O alvo precisa ser disjunto do projeto; caminhos iguais, ancestrais, descendentes, links e reparse points são recusados.
 
 ## Atualização e reversão
 

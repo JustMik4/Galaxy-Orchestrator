@@ -8,6 +8,7 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 
 - produto e CLI canônicos renomeados para Galaxy Orchestrator e `galaxy`;
 - namespace de projeto movido para `.galaxy/`, com `galaxy.lock` reproduzível;
+- lock autenticando os quatro arquivos declarativos, com sincronização explícita e checkout CRLF protegido;
 - `.codex/` passou a ser saída local gerada, não conteúdo vendorizado;
 - `multicontroller.py` mantido temporariamente como wrapper de compatibilidade;
 - branch prefix nova `galaxy/*`, com reconhecimento de `codex/*` no ciclo de vida histórico.
@@ -25,6 +26,7 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 
 - instalação e bootstrap V2 com separação entre declaração versionada e artefato gerado;
 - migração V1.3→V2 sem substituição global, com preview, backup externo, receipt, conflitos bloqueantes e rollback;
+- coordenação CO-OP V2 por workflow serializado, fixado à versão do lock e instalado somente nesse modo;
 - Galaxy Doctor para configuração, lock, bootstrap, Git, legado, checks, runtime, quota, ações, Vault e ciclo de vida;
 - Lifecycle Manager com preview padrão e aplicação explícita;
 - Action Resolver com navegador apenas após aprovação explícita;
@@ -37,9 +39,9 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 - `.multicontroller/`, `AGENT_TEAM.yml`, `.multicontroller/tools` e metadados antigos reconhecidos somente para migração/compatibilidade;
 - documentação V1 preservada como histórico.
 
-### Aceitação ainda pendente
+### Estado da aceitação
 
-Esta entrada não declara concluídos o smoke test do projeto Lexy, a suíte final completa, a renomeação física para `C:\AI\Galaxy-Orchestrator`, a renomeação do repositório no GitHub ou a configuração final de rulesets. Cada item exige evidência própria antes da publicação.
+A aceitação local e o smoke descartável da Lexy estão registrados em [VALIDATION.md](VALIDATION.md). A renomeação física para `C:\AI\Galaxy-Orchestrator`, a publicação/tag do repositório canônico no GitHub e a configuração final de rulesets permanecem externas; até essas evidências existirem, a versão continua candidato V2.
 
 ## 1.3.0 — histórico
 

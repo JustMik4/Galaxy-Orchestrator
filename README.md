@@ -55,6 +55,7 @@ O gate falha de propósito quando `commands` está vazio. Veja [Instalação](do
 
 ```text
 MeuProjeto/
+├── .gitattributes                    # preserva bytes das declarações em qualquer checkout
 ├── AGENTS.md                         # instruções estáveis do projeto
 ├── galaxy.lock                       # versão e revisões reproduzíveis
 ├── .galaxy/
@@ -66,7 +67,14 @@ MeuProjeto/
 └── .codex/                           # saída local gerada; não versionada
 ```
 
-`AGENTS.md`, `.galaxy/`, `galaxy.lock` e o workflow são declarações versionadas. `.codex/`, `.galaxy/local/`, `.galaxy/runtime/`, `.galaxy/cache/` e `.galaxy/install/` são locais ou gerados. O bootstrap recusa drift em arquivos gerados em vez de sobrescrever customizações silenciosamente.
+`AGENTS.md`, `.galaxy/`, `galaxy.lock`, `.gitattributes` e os workflows aplicáveis são versionados. O lock autentica os bytes de `AGENTS.md`, `project.yml`, `team.yml` e `checks.json`; `.gitattributes` mantém esses bytes estáveis inclusive com `core.autocrlf=true`. Depois de revisar uma alteração legítima nessas quatro declarações, atualize o lock explicitamente:
+
+```powershell
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto
+```
+
+O primeiro comando é somente leitura. `.codex/`, `.galaxy/local/`, `.galaxy/runtime/`, `.galaxy/cache/` e `.galaxy/install/` são locais ou gerados. O bootstrap recusa drift em arquivos gerados em vez de sobrescrever customizações silenciosamente.
 
 ## SOLO e CO-OP
 
@@ -76,13 +84,13 @@ MeuProjeto/
 python .\galaxy.py init C:\AI\Projetos\Solo --mode SOLO --preset balanced
 ```
 
-`CO-OP` grava em `.galaxy/team.yml` a coordenação serializada e o check requerido `galaxy / validate`:
+`CO-OP` grava em `.galaxy/team.yml` a coordenação serializada, instala o workflow `galaxy-control.yml` e declara o check requerido `galaxy / validate`:
 
 ```powershell
 python .\galaxy.py init C:\AI\Projetos\Equipe --mode CO-OP --preset critical
 ```
 
-O modo preserva as garantias V1 de um escritor por escopo, revisão independente, dependências em DAG e merge condicionado. A declaração local não cria credenciais, regras de branch ou recursos no GitHub. A ativação remota exige configuração explícita; veja [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md).
+O modo preserva as garantias V1 de um escritor por escopo, revisão independente, dependências em DAG e merge condicionado. O workflow falha fechado até que operadores, integradores, issue de controle, repositório/tag canônicos e regras da branch estejam configurados. A instalação não cria credenciais, issue, ruleset ou permissões no GitHub; veja [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md).
 
 ## Modelos, routing e quota
 
@@ -159,6 +167,8 @@ python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto
 
 Snapshots adicionais podem ser fornecidos com `--snapshot ARQUIVO`; a origem precisa ser um JSON local. `--force` só deve ser usado depois de revisar conflitos de propriedade. Detalhes de modos e privacidade estão no [SPEC V2](docs/SPEC-V2.md).
 
+Um Vault externo é configurado somente no arquivo local ignorado `.galaxy/local/operator.toml`. O caminho deve ser absoluto, sem link/reparse point e totalmente separado da árvore do projeto: não pode ser o próprio projeto, um ancestral ou um descendente.
+
 ## Compatibilidade e limites
 
 - `multicontroller.py` é um wrapper temporário com aviso de depreciação; novos fluxos usam `galaxy.py`.
@@ -166,7 +176,7 @@ Snapshots adicionais podem ser fornecidos com `--snapshot ARQUIVO`; a origem pre
 - Projetos novos usam `.galaxy/` e não vendorizam ferramentas do master.
 - Provedores LLM gratuitos externos não fazem parte da versão 2.0.0.
 - O Galaxy não concede credenciais, quota, permissões do GitHub ou acesso a modelos.
-- Renomeação do repositório, rulesets, smoke test Lexy e suíte final precisam de evidência própria; esta documentação não os declara concluídos.
+- A aceitação local e o smoke Lexy estão registrados em [Validação](docs/VALIDATION.md). Renomeação local, publicação do repositório/tag, rulesets e execução remota continuam limites externos separados.
 
 ## Documentação
 

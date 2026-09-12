@@ -68,6 +68,7 @@ galaxy bootstrap PROJECT [--check]
 galaxy migrate PROJECT [--preview | --rollback RECEIPT]
 galaxy validate PROJECT [--gate]
 galaxy doctor PROJECT [--json]
+galaxy lock sync PROJECT [--check]
 galaxy specialists list
 galaxy specialists sync PROJECT [--check]
 galaxy cleanup PROJECT [--preview | --apply]
@@ -83,7 +84,7 @@ documentação e automação não devem presumir superfícies que a CLI não reg
 
 ## Lock, bootstrap e migração
 
-`galaxy.lock` fixa versão do schema, release, hashes de declarações/especialistas/adapters e política efetiva. Fresh clone + bootstrap recria runtime Codex local sem vendorizar ferramentas no produto. O bootstrap não altera config global, login ou trust.
+`galaxy.lock` fixa versão do schema, release, hashes de declarações/especialistas/adapters e política efetiva. O mapa `declarations` contém exatamente SHA-256 de `AGENTS.md`, `.galaxy/project.yml`, `.galaxy/team.yml` e `.galaxy/checks.json`. O loader autentica e faz parse do mesmo snapshot de bytes; divergência falha fechada. Uma mudança revisada é aceita somente por `galaxy lock sync PROJECT`; `--check` é somente leitura. Fresh clone + bootstrap recria runtime Codex local sem vendorizar ferramentas no produto. O bootstrap não altera config global, login ou trust.
 
 Migração V1→V2 é semântica e restartável: preflight/preview, classificação (gerenciado, projeto-owned, gerado modificado), backup fora do projeto, aplicação, validação, receipt durável e rollback explícito. `AGENT_TEAM.yml` → `.galaxy/team.yml`, `.multicontroller/` → `.galaxy/` e workflows/checks têm regras próprias; nunca há substituição global de strings. Vaults V1, se encontrados, são apenas inventariados até o usuário escolher projeção ou declarations project-owned. Conflitos bloqueiam o commit da migração, preservando origem e destino.
 
