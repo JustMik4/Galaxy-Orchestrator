@@ -168,19 +168,9 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result.emergency_record.previous_route, Route("luna", "medium"))
         self.assertEqual(result.emergency_record.selected_route, Route("terra", "medium"))
 
-    def test_emergency_requires_evidence_and_respects_dispatch_limit(self):
+    def test_emergency_requires_evidence(self):
         with self.assertRaises(ValueError):
             self.router.route(RoutingRequest(task_class="reasoning", emergency=True))
-        result = self.router.route(
-            RoutingRequest(
-                task_class="reasoning",
-                emergency=True,
-                failure_evidence="evidence",
-                emergency_reason="reason",
-                emergency_dispatches=1,
-            )
-        )
-        self.assertEqual(result.action, RoutingAction.BLOCKED)
 
     def test_capability_missing_is_explicit(self):
         result = self.router.route(

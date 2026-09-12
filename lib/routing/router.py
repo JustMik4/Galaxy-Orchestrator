@@ -95,9 +95,9 @@ class RoutingRequest:
     failure_evidence: str | None = None
     emergency_reason: str | None = None
     emergency: bool = False
-    emergency_dispatches: int = 0
     frontier_reason: str | None = None
     quota_snapshot: "QuotaSnapshot | None" = None
+    task_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "profile", RouteProfile(self.profile))
@@ -105,8 +105,8 @@ class RoutingRequest:
             object.__setattr__(self, "failure_class", FailureClass(self.failure_class))
         if self.required_capability is not None and self.required_capability < 0:
             raise ValueError("required_capability cannot be negative")
-        if self.emergency_dispatches < 0:
-            raise ValueError("emergency_dispatches cannot be negative")
+        if self.task_id is not None and (not isinstance(self.task_id, str) or not self.task_id):
+            raise ValueError("task_id must be non-empty")
         if not isinstance(self.role, str) or not self.role.strip():
             raise ValueError("role must be non-empty")
         if not isinstance(self.task_class, str) or not self.task_class.strip():
@@ -301,8 +301,6 @@ class CapabilityRouter:
         policy = self.emergency_policy
         if not policy.enabled:
             return RoutingDecision(RoutingAction.BLOCKED, None, "emergency routing disabled")
-        if request.emergency_dispatches >= policy.max_emergency_dispatches_per_task:
-            return RoutingDecision(RoutingAction.BLOCKED, None, "emergency dispatch limit reached")
         if policy.require_failure_evidence and not (request.failure_evidence or "").strip():
             raise ValueError("emergency routing requires failure evidence")
         if not (request.emergency_reason or "").strip():

@@ -13,11 +13,18 @@ import stat
 from typing import Any, Iterable
 import uuid
 
+from .validation import validate_retention_days
+
 
 _DEFAULT_ROOTS = (".galaxy/runtime", ".galaxy/cache", ".galaxy/tmp",
                   ".galaxy/telemetry", ".multicontroller/runtime")
 _AUDIT_WORDS = ("audit", "evidence", "receipt", "review", "proof")
 _GENERATED_EXTENSIONS = {".tmp", ".temp", ".cache", ".pyc", ".log", ".wal", ".shm"}
+_CANONICAL_DISPATCH_AUDIT_PATHS = (
+    ".galaxy/runtime/dispatch-verification.json",
+    ".galaxy/runtime/emergency-dispatches.json",
+    ".galaxy/runtime/emergency-dispatches.json.lock",
+)
 
 
 def _stamp(value: Any, default: float) -> float:
@@ -150,10 +157,18 @@ def plan_runtime_cleanup(root: str | Path, *, paths: Iterable[str | Path] | None
     to add specific generated directories/files; arbitrary project files are
     never scanned.
     """
+    retention_days = validate_retention_days(retention_days)
     project = Path(os.path.abspath(root))
     _assert_no_links(project)
     current = float(now if now is not None else datetime.now(timezone.utc).timestamp())
-    protected = {Path(os.path.abspath(value)) for value in current_audit_paths}
+    # Dispatch verification is canonical audit state, not disposable runtime
+    # output.  It remains protected even when a caller supplies no audit list.
+    # Relative caller paths are project-relative, matching runtime ``paths``.
+    protected = {project / relative for relative in _CANONICAL_DISPATCH_AUDIT_PATHS}
+    for value in current_audit_paths or ():
+        candidate = Path(value)
+        protected.add(candidate if candidate.is_absolute() else project / candidate)
+    protected = {Path(os.path.abspath(value)) for value in protected}
     roots = [project / relative for relative in _DEFAULT_ROOTS] if paths is None else [Path(value) if Path(value).is_absolute() else project / value for value in paths]
     candidates: list[RuntimeCandidate] = []
     for scan_root in roots:
@@ -170,7 +185,7 @@ def plan_runtime_cleanup(root: str | Path, *, paths: Iterable[str | Path] | None
             protected_audit = _is_audit(path, protected)
             relative = path.relative_to(project).as_posix() if path.is_relative_to(project) else str(path)
             category = scan_root.name
-            old = modified <= current - float(retention_days) * 86400
+            old = modified <= current - retention_days * 86400
             reasons: list[str] = []
             if not old: reasons.append("retention-not-elapsed")
             if protected_audit: reasons.append("current-audit-evidence")
@@ -186,7 +201,7 @@ def plan_runtime_cleanup(root: str | Path, *, paths: Iterable[str | Path] | None
                 not reasons, tuple(reasons), identity,
             ))
     unique = {item.path: item for item in candidates}
-    return RuntimeCleanupPlan(str(project), float(retention_days),
+    return RuntimeCleanupPlan(str(project), retention_days,
                               tuple(sorted(unique.values(), key=lambda item: item.path)), True)
 
 

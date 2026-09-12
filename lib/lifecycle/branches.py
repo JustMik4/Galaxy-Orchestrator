@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Mapping, Iterable
 
+from .validation import validate_retention_days
+
 
 class LifecycleGitError(RuntimeError):
     """Git was unavailable or could not answer a lifecycle query."""
@@ -180,6 +182,7 @@ def plan_branch_cleanup(repo: str | Path, *, integration_branch: str = "main",
                         metadata: Mapping[str, Any] | None = None,
                         include_all_agent_branches: bool = True) -> BranchCleanupPlan:
     """Inspect ``galaxy/*`` and legacy ``codex/*`` branches without mutation."""
+    retention_days = validate_retention_days(retention_days)
     root = Path(repo).resolve()
     metadata = metadata or {}
     current = float(now if now is not None else datetime.now(timezone.utc).timestamp())
@@ -221,7 +224,7 @@ def plan_branch_cleanup(repo: str | Path, *, integration_branch: str = "main",
         active = bool(state.get("active", False)) or _listed(metadata, ("active", "active_tasks", "ownership", "task_ownership"), name)
         pending = bool(state.get("pending_recovery", False)) or _listed(metadata, ("pending_recovery", "pending_recoveries", "recovery"), name)
         dirty_worktree = bool(dirty.get(name, False)) or bool(state.get("dirty_worktree", False))
-        retention = last <= current - float(retention_days) * 86400
+        retention = last <= current - retention_days * 86400
         reasons: list[str] = []
         if not merged: reasons.append("not-merged")
         if not reachable: reasons.append("head-not-reachable")
@@ -234,7 +237,7 @@ def plan_branch_cleanup(repo: str | Path, *, integration_branch: str = "main",
         candidates.append(BranchCandidate(name, head, last, merged, reachable, remote,
                                           active, pending, dirty_worktree, retention, safe,
                                           tuple(reasons)))
-    return BranchCleanupPlan(str(root), integration_branch, float(retention_days),
+    return BranchCleanupPlan(str(root), integration_branch, retention_days,
                              tuple(sorted(candidates, key=lambda item: item.name)), True)
 
 

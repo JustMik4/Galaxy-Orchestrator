@@ -37,10 +37,21 @@ class VaultTests(unittest.TestCase):
     def test_internal_path_is_project_relative_and_safe(self):
         self.assertEqual(validate_internal_vault_path(self.project, '.galaxy/vault'),
                          self.project / '.galaxy' / 'vault')
-        for value in ('../vault', '/outside', 'C:/outside', '.galaxy/../vault'):
+        for value in ('.', './', '../vault', '/outside', 'C:/outside', '.galaxy/../vault'):
             with self.subTest(value=value):
                 with self.assertRaises(VaultError):
                     validate_internal_vault_path(self.project, value)
+
+    def test_projection_force_cannot_treat_project_root_as_vault(self):
+        stale = self.project / 'tasks' / 'KEEP.md'
+        stale.parent.mkdir()
+        stale.write_text(render_task_note(self.snapshot), encoding='utf-8')
+
+        with self.assertRaises(VaultError):
+            sync(self.project, {'enabled': True, 'path': '.', 'mode': 'projection'},
+                 self.envelope([]), force=True)
+
+        self.assertTrue(stale.is_file())
 
     def test_render_is_deterministic_and_has_frontmatter(self):
         first = render_task_note(self.snapshot)

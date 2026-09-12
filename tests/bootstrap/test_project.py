@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -73,6 +74,17 @@ class ProjectBoundaryTests(unittest.TestCase):
         self.assertEqual(project.lock.galaxy_version, "2.0.0")
         self.assertEqual(project.selected_specialists, ("git",))
 
+    def test_project_config_rejects_root_vault_path(self):
+        path = self.root / '.galaxy/project.yml'
+        config = json.loads(path.read_text(encoding='utf-8'))
+        config['vault']['enabled'] = True
+        config['vault']['path'] = '.'
+        path.write_text(json.dumps(config), encoding='utf-8')
+        update_declaration_hashes(self.root)
+
+        with self.assertRaisesRegex(ProjectConfigurationError, 'project-relative'):
+            load_project(self.root)
+
     def test_lock_rejects_credentials_and_local_paths(self):
         path = self.root / "galaxy.lock"
         lock = json.loads(path.read_text())
@@ -130,6 +142,84 @@ class ProjectBoundaryTests(unittest.TestCase):
             project = load_project(self.root)
 
         self.assertEqual(project.checks.commands, ())
+
+    def test_load_project_rejects_symlinked_declaration(self):
+        declaration = self.root / '.galaxy/project.yml'
+        target = self.root.parent / 'project-declaration-target.yml'
+        target.write_bytes(declaration.read_bytes())
+        self.addCleanup(lambda: target.unlink(missing_ok=True))
+        try:
+            declaration.unlink()
+            declaration.symlink_to(target)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f'declaration symlink unavailable: {exc}')
+        self.addCleanup(lambda: declaration.unlink(missing_ok=True))
+
+        with self.assertRaisesRegex(ProjectConfigurationError, 'link/reparse'):
+            load_project(self.root)
+
+    def test_load_project_rejects_symlinked_declaration_ancestor(self):
+        galaxy = self.root / '.galaxy'
+        redirected = self.root.parent / 'redirected-galaxy'
+        redirected.mkdir()
+        for name in ('project.yml', 'team.yml', 'checks.json'):
+            shutil.copy2(galaxy / name, redirected / name)
+        self.addCleanup(lambda: shutil.rmtree(redirected, ignore_errors=True))
+        try:
+            galaxy.rename(self.root / '.galaxy-original')
+            if os.name == 'nt':
+                created = subprocess.run(
+                    ['cmd', '/c', 'mklink', '/J', str(galaxy), str(redirected)],
+                    text=True, capture_output=True, check=False,
+                )
+                if created.returncode:
+                    raise OSError(created.stderr.strip() or 'junction creation failed')
+            else:
+                galaxy.symlink_to(redirected, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            original = self.root / '.galaxy-original'
+            if original.exists() and not galaxy.exists():
+                original.rename(galaxy)
+            self.skipTest(f'declaration ancestor symlink unavailable: {exc}')
+        original = self.root / '.galaxy-original'
+
+        def restore_galaxy_directory():
+            if galaxy.is_symlink():
+                galaxy.unlink()
+            elif getattr(galaxy, 'is_junction', lambda: False)():
+                galaxy.rmdir()
+            if original.exists():
+                original.rename(galaxy)
+
+        self.addCleanup(restore_galaxy_directory)
+
+        with self.assertRaisesRegex(ProjectConfigurationError, 'link/reparse'):
+            load_project(self.root)
+
+    def test_load_project_rejects_redirected_project_root(self):
+        alias = self.root.parent / 'project-root-alias'
+        try:
+            if os.name == 'nt':
+                created = subprocess.run(
+                    ['cmd', '/c', 'mklink', '/J', str(alias), str(self.root)],
+                    text=True, capture_output=True, check=False,
+                )
+                if created.returncode:
+                    raise OSError(created.stderr.strip() or 'junction creation failed')
+            else:
+                alias.symlink_to(self.root, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f'project root redirection unavailable: {exc}')
+
+        def remove_alias():
+            if getattr(alias, 'is_junction', lambda: False)():
+                alias.rmdir()
+            else:
+                alias.unlink(missing_ok=True)
+
+        self.addCleanup(remove_alias)
+        with self.assertRaisesRegex(ProjectConfigurationError, 'link/reparse'):
+            load_project(alias)
 
     def test_template_lock_authenticates_exact_canonical_declaration_bytes(self):
         template = Path(__file__).resolve().parents[2] / "template"

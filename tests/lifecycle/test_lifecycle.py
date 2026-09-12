@@ -9,7 +9,7 @@ from unittest.mock import patch
 import lib.lifecycle.runtime as runtime_module
 from lib.lifecycle import (
     apply_branch_cleanup, apply_runtime_cleanup, branch_cleanup_plan,
-    plan_runtime_cleanup, plan_worktree_cleanup,
+    plan_lifecycle, plan_runtime_cleanup, plan_worktree_cleanup,
 )
 
 
@@ -99,6 +99,51 @@ class LifecycleTests(unittest.TestCase):
         apply_runtime_cleanup(plan, apply=True)
         self.assertFalse(old.exists())
         self.assertTrue(audit.exists())
+
+    def test_canonical_dispatch_verification_is_protected_without_audit_paths(self):
+        runtime = self.repo / ".galaxy" / "runtime"
+        runtime.mkdir(parents=True)
+        dispatch = runtime / "dispatch-verification.json"
+        dispatch.write_text('{"records": []}')
+        old_stamp = time.time() - 10 * 86400
+        os.utime(dispatch, (old_stamp, old_stamp))
+
+        plan = plan_runtime_cleanup(self.repo, retention_days=3, now=time.time())
+
+        candidate = next(item for item in plan.candidates if item.path.endswith(
+            ".galaxy/runtime/dispatch-verification.json"
+        ))
+        self.assertFalse(candidate.safe)
+        self.assertTrue(candidate.protected_audit)
+        self.assertIn("current-audit-evidence", candidate.reasons)
+        self.assertNotIn(candidate.path, plan.targets)
+
+    def test_emergency_dispatch_budget_state_is_never_a_cleanup_target(self):
+        runtime = self.repo / ".galaxy/runtime"
+        runtime.mkdir(parents=True)
+        for name in ("emergency-dispatches.json", "emergency-dispatches.json.lock"):
+            path = runtime / name
+            path.write_text("state\n", encoding="utf-8")
+            os.utime(path, (1, 1))
+
+        plan = plan_runtime_cleanup(self.repo, retention_days=0, now=time.time())
+
+        by_path = {candidate.path: candidate for candidate in plan.candidates}
+        for name in ("emergency-dispatches.json", "emergency-dispatches.json.lock"):
+            relative = f".galaxy/runtime/{name}"
+            self.assertFalse(by_path[relative].safe)
+            self.assertTrue(by_path[relative].protected_audit)
+            self.assertIn("current-audit-evidence", by_path[relative].reasons)
+
+    def test_retention_must_be_finite_and_non_negative(self):
+        for value in (-1, float("-inf"), float("inf"), float("nan")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "finite and >= 0"):
+                    branch_cleanup_plan(self.repo, retention_days=value)
+                with self.assertRaisesRegex(ValueError, "finite and >= 0"):
+                    plan_runtime_cleanup(self.repo, retention_days=value)
+                with self.assertRaisesRegex(ValueError, "finite and >= 0"):
+                    plan_lifecycle(str(self.repo), retention_days=value)
 
     def test_apply_rejects_unvalidated_targets(self):
         self.branch("galaxy/old")

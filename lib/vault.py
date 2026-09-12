@@ -51,14 +51,24 @@ def _reject_links(path):
 def validate_internal_vault_path(project, configured):
     """Return a safe vault path when *configured* is a strict project-relative path."""
     root = Path(os.path.abspath(project))
-    value = Path(configured)
-    if value.is_absolute() or not str(configured).strip() or any(part == '..' for part in value.parts):
+    raw = os.fspath(configured) if isinstance(configured, os.PathLike) else configured
+    if not isinstance(raw, str) or not raw.strip():
+        raise VaultError('internal vault path must be project-relative and contain no traversal')
+    value = PurePosixPath(raw.replace('\\', '/'))
+    if (
+        value.is_absolute()
+        or not value.parts
+        or re.match(r'^[A-Za-z]:/', raw.replace('\\', '/'))
+        or any(part == '..' for part in value.parts)
+    ):
         raise VaultError('internal vault path must be project-relative and contain no traversal')
     target = Path(os.path.abspath(root / value))
     try:
         target.relative_to(root)
     except ValueError:
         raise VaultError('vault path escapes project')
+    if target == root:
+        raise VaultError('internal vault path must be a strict project descendant')
     _reject_links(root)
     _reject_links(target)
     return target

@@ -437,8 +437,11 @@ class GalaxyV2CliTests(unittest.TestCase):
         stale = self.project / ".galaxy/runtime/old.tmp"
         stale.parent.mkdir(parents=True)
         stale.write_text("cache", encoding="utf-8")
+        dispatch_state = stale.parent / "dispatch-verification.json"
+        dispatch_state.write_text('{"records": []}', encoding="utf-8")
         old = 1_600_000_000
         os.utime(stale, (old, old))
+        os.utime(dispatch_state, (old, old))
 
         result = self.run_cli("cleanup", self.project, "--preview")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -446,7 +449,16 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertEqual(payload["command"], "cleanup")
         self.assertFalse(payload["applied"])
         self.assertIn(".galaxy/runtime/old.tmp", payload["targets"]["runtime"])
+        self.assertNotIn(".galaxy/runtime/dispatch-verification.json", payload["targets"]["runtime"])
         self.assertTrue(stale.is_file())
+        self.assertTrue(dispatch_state.is_file())
+
+    def test_cleanup_rejects_negative_and_non_finite_retention(self):
+        for value in ("-1", "nan", "inf"):
+            with self.subTest(value=value):
+                result = self.run_cli("cleanup", self.project, "--preview", "--retention-days", value)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("retention_days must be finite and >= 0", result.stderr)
 
     def test_vault_status_is_disabled_and_read_only_by_default(self):
         install = self.run_cli("install", self.project)

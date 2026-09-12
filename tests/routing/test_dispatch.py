@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lib.dispatch import DispatchCoordinator
@@ -86,7 +87,7 @@ class DispatchCoordinatorTests(unittest.TestCase):
         self.assertTrue(allowed["authorized"])
         self.assertEqual(allowed["route"]["model"], "astra")
 
-    def test_project_profile_cannot_be_overridden_by_dispatch_request(self):
+    def test_task_contract_can_override_project_profile_with_allowed_value(self):
         declaration = self.project / ".galaxy/project.yml"
         project = json.loads(declaration.read_text())
         project["routing"] = {"profile": "quality"}
@@ -97,10 +98,61 @@ class DispatchCoordinatorTests(unittest.TestCase):
             {"task_class": "implementation"}, self.capabilities, self.quota,
         )
         self.assertEqual(selected["route"], {"model": "terra", "effort": "medium"})
-        with self.assertRaisesRegex(ValueError, "unsupported routing request fields"):
+        overridden = coordinator.authorize(
+            {"required_capability": 2, "profile": "economy"},
+            self.capabilities, self.quota,
+        )
+        self.assertEqual(overridden["route"], {"model": "luna", "effort": "medium"})
+        self.assertEqual(overridden["profile"], "economy")
+        with self.assertRaisesRegex(ValueError, "task routing profile"):
             coordinator.authorize(
-                {"required_capability": 2, "profile": "economy"},
+                {"required_capability": 2, "profile": "untrusted"},
                 self.capabilities, self.quota,
+            )
+
+    def test_authenticated_task_profile_override_is_applied_only_to_bound_task(self):
+        declaration = self.project / ".galaxy/project.yml"
+        project = json.loads(declaration.read_text())
+        project["routing"] = {
+            "profile": "economy",
+            "task_profiles": {"security-review": "quality"},
+        }
+        declaration.write_text(json.dumps(project), encoding="utf-8")
+        update_declaration_hashes(self.project)
+
+        coordinator = DispatchCoordinator(self.project)
+        ordinary = coordinator.authorize(
+            {"task_id": "ordinary", "task_class": "implementation"},
+            self.capabilities, self.quota,
+        )
+        planned = coordinator.authorize(
+            {"task_id": "security-review", "task_class": "implementation"},
+            self.capabilities, self.quota,
+        )
+        self.assertEqual(ordinary["route"], {"model": "luna", "effort": "medium"})
+        self.assertEqual(planned["route"], {"model": "terra", "effort": "medium"})
+        self.assertEqual(ordinary["profile"], "economy")
+        self.assertEqual(planned["profile"], "quality")
+        self.assertEqual(planned["task_id"], "security-review")
+        explicit = coordinator.authorize(
+            {"task_id": "ordinary", "profile": "quality"},
+            self.capabilities, self.quota,
+        )
+        self.assertEqual(explicit["profile"], "quality")
+        self.assertEqual(explicit["route"], {"model": "terra", "effort": "medium"})
+
+    def test_invalid_authenticated_task_profile_is_rejected(self):
+        declaration = self.project / ".galaxy/project.yml"
+        project = json.loads(declaration.read_text())
+        project["routing"] = {
+            "profile": "balanced",
+            "task_profiles": {"security-review": "untrusted"},
+        }
+        declaration.write_text(json.dumps(project), encoding="utf-8")
+        update_declaration_hashes(self.project)
+        with self.assertRaisesRegex(ValueError, "task profile"):
+            DispatchCoordinator(self.project).authorize(
+                {"task_id": "security-review"}, self.capabilities, self.quota,
             )
 
     def test_quota_floor_blocks_dispatch_before_request_is_recorded(self):
@@ -133,6 +185,7 @@ class DispatchCoordinatorTests(unittest.TestCase):
     def test_emergency_authorization_persists_complete_evidence(self):
         coordinator = DispatchCoordinator(self.project)
         result = coordinator.authorize({
+            "task_id": "task-emergency-1",
             "task_class": "implementation", "required_capability": 3,
             "emergency": True,
             "previous_route": {"model": "luna", "effort": "medium"},
@@ -151,6 +204,84 @@ class DispatchCoordinatorTests(unittest.TestCase):
             result["dispatch"]["dispatch_id"]
         )
         self.assertEqual(stored.metadata["emergency_record"], evidence)
+        self.assertEqual(stored.metadata["task_id"], "task-emergency-1")
+
+    def test_emergency_limit_uses_persisted_task_identity_not_request_counter(self):
+        request = {
+            "task_id": "task-emergency-1",
+            "task_class": "implementation", "required_capability": 3,
+            "emergency": True,
+            "previous_route": {"model": "luna", "effort": "medium"},
+            "failure_class": "reasoning",
+            "failure_evidence": "same obligation failed twice",
+            "emergency_reason": "bounded intermediate escalation",
+        }
+        first = DispatchCoordinator(self.project).authorize(
+            request, self.capabilities, self.quota,
+        )
+        second = DispatchCoordinator(self.project).authorize(
+            request, self.capabilities, self.quota,
+        )
+        self.assertTrue(first["authorized"])
+        self.assertFalse(second["authorized"])
+        self.assertEqual(second["reason"], "emergency dispatch limit reached")
+        state = json.loads(
+            (self.project / ".galaxy/runtime/emergency-dispatches.json").read_text()
+        )
+        self.assertEqual(sum(item["dispatches"] for item in state["tasks"].values()), 1)
+
+        other = DispatchCoordinator(self.project).authorize(
+            {**request, "task_id": "task-emergency-2"},
+            self.capabilities, self.quota,
+        )
+        self.assertTrue(other["authorized"])
+
+    def test_malformed_emergency_state_fails_closed_without_being_replaced(self):
+        state_path = self.project / ".galaxy/runtime/emergency-dispatches.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text('{"version":1,"tasks":"forged"}', encoding="utf-8")
+        result = DispatchCoordinator(self.project).authorize({
+            "task_id": "task-emergency-1", "emergency": True,
+            "failure_evidence": "evidence", "emergency_reason": "reason",
+        }, self.capabilities, self.quota)
+        self.assertFalse(result["authorized"])
+        self.assertEqual(result["reason"], "emergency dispatch limit reached")
+        self.assertEqual(
+            state_path.read_text(encoding="utf-8"),
+            '{"version":1,"tasks":"forged"}',
+        )
+
+    def test_emergency_limit_claim_is_atomic_for_concurrent_coordinators(self):
+        request = {
+            "task_id": "concurrent-task", "task_class": "implementation",
+            "required_capability": 3, "emergency": True,
+            "previous_route": {"model": "luna", "effort": "medium"},
+            "failure_class": "reasoning", "failure_evidence": "evidence",
+            "emergency_reason": "reason",
+        }
+
+        def authorize():
+            return DispatchCoordinator(self.project).authorize(
+                request, self.capabilities, self.quota,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: authorize(), range(2)))
+        self.assertEqual(sum(result["authorized"] for result in results), 1)
+
+    def test_emergency_requires_task_identity_and_rejects_request_counter(self):
+        common = {
+            "emergency": True, "failure_evidence": "evidence",
+            "emergency_reason": "reason",
+        }
+        coordinator = DispatchCoordinator(self.project)
+        with self.assertRaisesRegex(ValueError, "task_id"):
+            coordinator.authorize(common, self.capabilities, self.quota)
+        with self.assertRaisesRegex(ValueError, "unsupported routing request fields"):
+            coordinator.authorize(
+                {**common, "task_id": "task-1", "emergency_dispatches": 0},
+                self.capabilities, self.quota,
+            )
 
     def test_review_cache_reuses_only_exact_unchanged_fingerprint(self):
         coordinator = DispatchCoordinator(self.project)

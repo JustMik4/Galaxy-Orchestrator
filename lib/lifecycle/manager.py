@@ -8,6 +8,7 @@ from typing import Any, Iterable, Mapping
 from .branches import BranchCleanupPlan, apply_branch_cleanup, plan_branch_cleanup
 from .worktrees import WorktreeCleanupPlan, apply_worktree_cleanup, plan_worktree_cleanup
 from .runtime import RuntimeCleanupPlan, apply_runtime_cleanup, plan_runtime_cleanup
+from .validation import validate_retention_days
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ def plan_lifecycle(repo: str, *, integration_branch: str = "main", retention_day
                    runtime_paths: Iterable[str] | None = None,
                    current_audit_paths: Iterable[str] = ()) -> LifecyclePlan:
     """Build a completely read-only lifecycle plan (preview by default)."""
+    retention_days = validate_retention_days(retention_days)
     return LifecyclePlan(
         plan_branch_cleanup(repo, integration_branch=integration_branch,
                             retention_days=retention_days, now=now, metadata=metadata),

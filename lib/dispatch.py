@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import stat
 from typing import Any, Mapping
 
@@ -14,14 +15,17 @@ from .routing import (
     CapabilityCatalog, CapabilityRouter, FailureClass, ModelCapability, Route,
     RouteProfile, RoutingAction, RoutingRequest,
 )
+from .routing.emergency import EmergencyDispatchState
 from .runtime import RuntimeVerifier
 
 
 _REQUEST_FIELDS = frozenset({
     "role", "task_class", "risk", "required_capability", "specialist",
     "failure_class", "previous_route", "failure_evidence", "emergency_reason",
-    "emergency", "emergency_dispatches", "frontier_reason",
+    "emergency", "frontier_reason", "task_id", "profile",
 })
+
+_TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _CAPABILITY_FIELDS = frozenset({
     "model", "effort", "capability", "expected_cost", "frontier", "family",
 })
@@ -98,11 +102,48 @@ def _quota(value: Any) -> QuotaSnapshot:
     return snapshot
 
 
-def _request(value: Any, *, default_profile: str, quota: QuotaSnapshot) -> RoutingRequest:
+def _task_id(value: Any, *, required: bool = False) -> str | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or not _TASK_ID.fullmatch(value):
+        raise ValueError("task_id must be a safe non-empty identifier")
+    if any(part in ("", ".", "..") for part in value.replace(":", "/").split("/")):
+        raise ValueError("task_id must be a safe non-empty identifier")
+    return value
+
+
+def _profile_for_task(
+    policy: Mapping[str, Any], task_id: str | None, requested: Any = None,
+) -> RouteProfile:
+    try:
+        default = RouteProfile(policy.get("profile", "balanced"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("project routing profile is not allowed") from exc
+    overrides = policy.get("task_profiles", {})
+    if not isinstance(overrides, Mapping):
+        raise ValueError("project routing task_profiles must be an object")
+    parsed: dict[str, RouteProfile] = {}
+    for identity, value in overrides.items():
+        normalized = _task_id(identity, required=True)
+        try:
+            parsed[normalized] = RouteProfile(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("project routing task profile is not allowed") from exc
+    selected = parsed.get(task_id, default)
+    if requested is None:
+        return selected
+    try:
+        return RouteProfile(requested)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("task routing profile is not allowed") from exc
+
+
+def _request(value: Any, *, profile: RouteProfile, quota: QuotaSnapshot) -> RoutingRequest:
     raw = _mapping(value, "routing request")
     unknown = set(raw) - _REQUEST_FIELDS
     if unknown:
         raise ValueError("unsupported routing request fields: " + ", ".join(sorted(unknown)))
+    identity = _task_id(raw.get("task_id"), required=bool(raw.get("emergency")))
     previous = raw.get("previous_route")
     if previous is not None:
         previous = _mapping(previous, "previous_route")
@@ -110,7 +151,8 @@ def _request(value: Any, *, default_profile: str, quota: QuotaSnapshot) -> Routi
             raise ValueError("previous_route requires only model and effort")
         previous = Route(previous["model"], previous["effort"])
     values = dict(raw)
-    values["profile"] = RouteProfile(default_profile)
+    values["task_id"] = identity
+    values["profile"] = profile
     values["previous_route"] = previous
     values["quota_snapshot"] = quota
     if values.get("failure_class") is not None:
@@ -130,20 +172,47 @@ class DispatchCoordinator:
         review_path = _safe_local_path(
             self.project.root, ".galaxy/cache/reviews.json",
         )
+        emergency_path = _safe_local_path(
+            self.project.root, ".galaxy/runtime/emergency-dispatches.json",
+        )
+        _safe_local_path(
+            self.project.root, ".galaxy/runtime/emergency-dispatches.json.lock",
+        )
         self.verifier = RuntimeVerifier(verifier_path, version=self.project.lock.galaxy_version)
         self.reviews = ReviewCache(review_path)
+        # Validate both fixed paths before the accounting helper opens either.
+        self.emergency_state = EmergencyDispatchState(emergency_path)
 
     def authorize(self, request: Any, capabilities: Any, quota: Any) -> dict[str, Any]:
         snapshot = _quota(quota)
-        profile = self.project.config.raw.get("routing", {})
-        if not isinstance(profile, Mapping):
+        policy = self.project.config.raw.get("routing", {})
+        if not isinstance(policy, Mapping):
             raise ValueError("project routing policy must be an object")
-        default_profile = profile.get("profile", "balanced")
-        routing_request = _request(request, default_profile=default_profile, quota=snapshot)
+        raw_request = _mapping(request, "routing request")
+        identity = _task_id(
+            raw_request.get("task_id"), required=bool(raw_request.get("emergency")),
+        )
+        profile = _profile_for_task(policy, identity, raw_request.get("profile"))
+        routing_request = _request(raw_request, profile=profile, quota=snapshot)
         router = CapabilityRouter(
             _catalog(capabilities), quota_guard=load_operator_quota_guard(self.operator_config),
         )
         decision = router.route(routing_request)
+        if decision.action is RoutingAction.EMERGENCY_DISPATCH:
+            _safe_local_path(
+                self.project.root, ".galaxy/runtime/emergency-dispatches.json",
+            )
+            _safe_local_path(
+                self.project.root, ".galaxy/runtime/emergency-dispatches.json.lock",
+            )
+            assert routing_request.task_id is not None
+            if not self.emergency_state.try_claim(
+                routing_request.task_id,
+                router.emergency_policy.max_emergency_dispatches_per_task,
+            ):
+                decision = type(decision)(
+                    RoutingAction.BLOCKED, None, "emergency dispatch limit reached",
+                )
         route = (
             {"model": decision.route.model, "effort": decision.route.effort}
             if decision.route is not None else None
@@ -182,6 +251,8 @@ class DispatchCoordinator:
                 decision.route.model, decision.route.effort,
                 metadata={
                     "action": decision.action.value,
+                    "task_id": routing_request.task_id,
+                    "profile": routing_request.profile.value,
                     "role": routing_request.role,
                     "task_class": routing_request.task_class,
                     "risk": routing_request.risk,
@@ -193,6 +264,8 @@ class DispatchCoordinator:
         return {
             "authorized": authorized,
             "action": decision.action.value,
+            "task_id": routing_request.task_id,
+            "profile": routing_request.profile.value,
             "route": route,
             "reason": decision.reason,
             "failure_class": decision.failure_class.value if decision.failure_class else None,

@@ -313,7 +313,9 @@ def main(argv: list[str] | None = None) -> int:
         options = parser.parse_args(arguments[1:])
         try:
             from .lifecycle import apply_lifecycle, plan_lifecycle
-            plan = plan_lifecycle(options.project, retention_days=options.retention_days)
+            from .lifecycle.validation import validate_retention_days
+            retention_days = validate_retention_days(options.retention_days)
+            plan = plan_lifecycle(options.project, retention_days=retention_days)
             if options.apply:
                 payload = apply_lifecycle(plan, apply=True)
                 payload["targets"] = {key: list(value) for key, value in plan.targets.items()}

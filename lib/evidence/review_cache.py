@@ -12,10 +12,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
 from typing import Any, Iterable, Mapping
+
+
+def _paths_are_case_sensitive() -> bool:
+    """Return the host path-name semantics used for repository scope keys."""
+
+    return os.path.normcase("Galaxy-A") != os.path.normcase("galaxy-a")
 
 
 def normalize_relevant_scope(scope: Any) -> tuple[str, ...]:
@@ -36,6 +43,7 @@ def normalize_relevant_scope(scope: Any) -> tuple[str, ...]:
         except TypeError as exc:
             raise ValueError("relevant scope must be a path or iterable of paths") from exc
     normalized: set[str] = set()
+    case_sensitive = _paths_are_case_sensitive()
     for item in values:
         if not isinstance(item, str):
             raise ValueError("relevant scope entries must be strings")
@@ -49,7 +57,7 @@ def normalize_relevant_scope(scope: Any) -> tuple[str, ...]:
         if any(part in ("", ".", "..") or part.endswith((" ", ".")) for part in parts):
             raise ValueError("unsafe relevant scope entry")
         value = "/".join(parts)
-        normalized.add(value.casefold())
+        normalized.add(value if case_sensitive else value.casefold())
     return tuple(sorted(normalized))
 
 
