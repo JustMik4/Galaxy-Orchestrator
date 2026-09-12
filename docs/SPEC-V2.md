@@ -58,22 +58,28 @@ Vault externo pode estar em área pessoal e não deve ser assumido como reposit�
 
 ## Comandos V2
 
-Comandos devem aceitar caminhos como argumentos (sem shell concatenado) e oferecer `--json` para automação:
+Comandos aceitam caminhos como argumentos posicionais, sem concatenação de shell. Comandos que produzem
+relatórios estruturados escrevem JSON por padrão; o Doctor oferece `--json` explicitamente:
 
 ```text
-galaxy init [--mode SOLO|CO-OP] [--preset balanced|critical]
-galaxy bootstrap --project PATH [--what-if]
-galaxy route TASK.json
-galaxy specialist list|explain TASK.json
-galaxy vault status --project PATH
-galaxy vault sync --project PATH [--check|--force]
-galaxy vault export TASK_ID --project PATH
-galaxy doctor --project PATH [--fix-safe]
-galaxy migrate --project PATH [--what-if|--rollback RECEIPT]
-galaxy validate --project PATH
+galaxy install PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]
+galaxy init PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]
+galaxy bootstrap PROJECT [--check]
+galaxy migrate PROJECT [--preview | --rollback RECEIPT]
+galaxy validate PROJECT [--gate]
+galaxy doctor PROJECT [--json]
+galaxy specialists list
+galaxy specialists sync PROJECT [--check]
+galaxy cleanup PROJECT [--preview | --apply]
+galaxy vault status PROJECT [--snapshot FILE]
+galaxy vault sync PROJECT [--snapshot FILE] [--check] [--force]
 ```
 
 `vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report. A sincronização não despacha agentes nem altera claims. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
+
+Roteamento, explicação de especialistas, Action Resolver e Resource Catalog são APIs internas nesta
+versão. Não há comandos públicos `route`, `specialist explain`, `vault export` ou `doctor --fix-safe`;
+documentação e automação não devem presumir superfícies que a CLI não registra.
 
 ## Lock, bootstrap e migração
 
@@ -90,4 +96,3 @@ Vault exige testes para: disabled/no-op; path interno e externo; projeção dete
 ## Decisões de implementação
 
 Resource Catalog/public-apis é secundário e opcional. Browser é fallback com aprovação quando connector/API/CLI não existir. Quota padrão para novos dispatches: parar com `<=15%` restante em cinco horas ou `<=2%` semanal; hard stop permite apenas cleanup/handoff. Review é independente e reutilizável por fingerprint somente quando head/base, escopo, contrato, testes e política coincidirem.
-

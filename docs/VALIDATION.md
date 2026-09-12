@@ -118,15 +118,31 @@ git status --short
 
 Também execute as suítes focadas de routing/quota, runtime/review, specialists, bootstrap, migration, doctor/actions, lifecycle, resources e vault quando uma dessas áreas mudar.
 
-## Estado de aceitação desta documentação
+## Evidência integrada de 2026-09-12
 
-No momento desta atualização:
+No checkout V2 integrado em Windows:
 
-- a documentação descreve a arquitetura e a CLI V2 presentes no checkout;
-- os testes focados pertencem aos respectivos relatórios de implementação;
-- a suíte final completa ainda precisa ser executada após a integração de todas as mudanças concorrentes;
-- o smoke test Lexy ainda precisa de evidência final;
-- a renomeação local e a renomeação do repositório GitHub ainda precisam ser verificadas;
-- a proteção `galaxy / validate` ainda precisa ser confirmada no repositório publicado.
+- `python -m unittest discover -s tests -v`: **184 testes passaram**, zero falhas e um skip;
+- o skip foi somente o caso que cria um symlink real, indisponível sem o privilégio do Windows (`WinError 1314`); validação e revisão estática de symlink/junction/reparse permaneceram cobertas;
+- `python -m compileall -q lib tests galaxy.py multicontroller.py`: passou;
+- parsing dos três scripts PowerShell e execução dos entrypoints `galaxy.py` e `lib/galaxy.py`: passaram;
+- `git diff --check`: passou.
 
-Não substitua esta lista por números antigos da linha V1.3. Registre comando, commit, ambiente, duração e saída de cada execução final.
+O smoke V1.3→V2 usou um clone local descartável do `HEAD` da Lexy. A árvore original, que continha
+uma alteração local do usuário, permaneceu intocada. Preview e aplicação terminaram com receipt e backup;
+o Doctor retornou zero `FAIL`, 17 `PASS`, dois `WARN` esperados (resíduos V1 locais e templates de
+ambiente duplicados) e três `UNKNOWN` honestos (runtime, quota e action capability não fornecidos).
+No clone migrado, a suíte do produto passou com **284 testes** e `pip check` informou zero dependências
+quebradas.
+
+O comando `validate --gate` do clone limpo não iniciou porque `.galaxy/checks.json` referencia
+`.venv\\Scripts\\python.exe`, ambiente local corretamente ignorado e ausente no clone. Os mesmos dois
+comandos foram executados no diretório do clone com o interpretador da Lexy original: ambos passaram.
+Antes de usar o gate em CI/fresh clone, o projeto deve provisionar o ambiente declarado ou trocar o check
+por um interpretador reproduzível do runner.
+
+Pendências externas e de transição física continuam separadas da qualidade do checkout:
+
+- a instalação local ainda precisa ser movida para `C:\AI\Galaxy-Orchestrator` depois de encerrar esta sessão e qualquer processo que use o caminho antigo;
+- o repositório `JustMik4/Galaxy-Orchestrator`, a tag `v2.0.0`, o ruleset e o check remoto `galaxy / validate` ainda precisam ser publicados/verificados com capability GitHub autenticada;
+- o workflow distribuído falha fechado enquanto o repositório/tag canônicos não existem.
