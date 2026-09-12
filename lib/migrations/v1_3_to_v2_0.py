@@ -180,6 +180,7 @@ def _ignore_bytes(project: Path) -> bytes:
         return original
     rules = (
         marker + b"\n"
+        b".env\n"
         b".codex/\n"
         b".agents/skills/multicontroller/\n"
         b".multicontroller/tools/\n"
@@ -217,8 +218,19 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     if master == project or master in project.parents or project in master.parents:
         raise MigrationError("master and project must be separate directory trees")
 
-    legacy_markers = [project / TEAM, project / MANIFEST, project / POLICY, project / CHECKS]
-    if (project / "galaxy.lock").is_file() and not any(path.exists() for path in legacy_markers[:1]):
+    if (project / "galaxy.lock").is_file() and not (project / TEAM).exists():
+        try:
+            from lib.project import load_project
+
+            loaded = load_project(project)
+        except (OSError, ValueError) as exc:
+            raise MigrationDetectionError(
+                "galaxy.lock exists but the V2 declaration set is incomplete or invalid"
+            ) from exc
+        if loaded.lock.galaxy_version != TO_VERSION:
+            raise MigrationDetectionError(
+                "galaxy.lock is not a complete Galaxy V2.0 migration target"
+            )
         return MigrationPlan(MIGRATION_ID, FROM_VERSION, TO_VERSION, "already_migrated")
 
     manifest = _read_json(project, MANIFEST)
@@ -359,19 +371,47 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     )
 
 
-def _default_validator(project: Path) -> dict[str, Any]:
-    for relative in (
-        ".galaxy/team.yml", ".galaxy/checks.json", ".galaxy/project.yml", "galaxy.lock"
-    ):
-        _read_json(project, relative)
-    return {"status": "passed", "validator": "migration-structural"}
+def _default_validator(project: Path, catalog_root: Path) -> dict[str, Any]:
+    from lib.bootstrap import bootstrap_plan
+    from lib.project import load_project
+
+    loaded = load_project(project)
+    generated = bootstrap_plan(project, catalog_root=catalog_root)
+    if not generated.clean:
+        details = sorted(
+            set(generated.create) | set(generated.update) |
+            set(generated.remove) | set(generated.drift)
+        )
+        raise MigrationError("validation failed: bootstrap is not reproducible: " + ", ".join(details))
+    return {
+        "status": "passed",
+        "validator": "load_project+bootstrap-check",
+        "mode": loaded.team.mode,
+        "galaxy_version": loaded.lock.galaxy_version,
+    }
 
 
 def _default_doctor(project: Path) -> dict[str, Any]:
-    lock = _read_json(project, "galaxy.lock")
-    if lock.get("galaxy", {}).get("version") != TO_VERSION:
-        raise MigrationError("doctor failed: lock version mismatch")
-    return {"status": "passed", "doctor": "migration-boundary"}
+    from lib.doctor import run_doctor
+    from lib.project import load_project
+
+    report = run_doctor(project, galaxy_version=TO_VERSION)
+    report_data = report.to_dict()
+    failures = [item.id for item in report.failed]
+    configured_checks = load_project(project).checks.commands
+    accepted = failures == ["required-product-checks"] and not configured_checks
+    return {
+        "status": (
+            "passed" if report.exit_code == 0
+            else "accepted_pending_product_checks" if accepted
+            else "failed"
+        ),
+        "engine": "lib.doctor.run_doctor",
+        "exit_code": report.exit_code,
+        "report_status": report_data["status"],
+        "accepted_failures": failures if accepted else [],
+        "report": report_data,
+    }
 
 
 def apply(
@@ -406,13 +446,17 @@ def apply(
         "untracked": [],
         "generated": list(migration_plan.generated),
         "conflicts": list(migration_plan.conflicts),
-        "bootstrap": {"status": "pending"},
-        "validation": {"status": "pending"},
-        "doctor": {"status": "pending"},
+        "configuration": {"status": "not_run"},
+        "bootstrap": {"status": "not_run"},
+        "validation": {"status": "not_run"},
+        "git": {"status": "not_run", "untracked": []},
+        "doctor": {"status": "not_run"},
         "vault_inventory": list(migration_plan.vault_inventory),
         "status": "in_progress",
     }
+    active_phase = "configuration"
     try:
+        receipt[active_phase] = {"status": "running"}
         for relative, data in sorted(migration_plan._writes.items()):
             target = checked_project_path(project, relative)
             atomic_write(target, data)
@@ -422,9 +466,12 @@ def apply(
                 if not target.is_file():
                     raise MigrationError("refusing to delete non-file: " + relative)
                 target.unlink()
+        receipt[active_phase] = {"status": "passed"}
 
         from lib.bootstrap import bootstrap, bootstrap_plan
 
+        active_phase = "bootstrap"
+        receipt[active_phase] = {"status": "running"}
         catalog_root = master / "specialists"
         if not catalog_root.is_dir():
             catalog_root = Path(__file__).resolve().parents[2] / "specialists"
@@ -443,19 +490,28 @@ def apply(
             set(receipt["generated"]) | set(bootstrap_result.written)
         )
 
-        receipt["validation"] = normalize_check_result(
-            (validator or _default_validator)(project), "validation"
+        active_phase = "validation"
+        receipt[active_phase] = {"status": "running"}
+        validation_result = (
+            validator(project) if validator is not None
+            else _default_validator(project, catalog_root)
         )
+        receipt["validation"] = normalize_check_result(validation_result, "validation")
 
         # The index boundary is deliberately after bootstrap/validation. Working
         # copies are never removed by these literal, one-path Git commands.
+        active_phase = "git"
+        receipt[active_phase] = {"status": "running", "untracked": []}
         for relative in migration_plan.untrack:
             run_git(project, ["rm", "--cached", "--force", "--ignore-unmatch", "--", relative])
             receipt["untracked"].append(relative)
+            receipt[active_phase]["untracked"].append(relative)
+        receipt[active_phase]["status"] = "passed"
 
-        receipt["doctor"] = normalize_check_result(
-            (doctor or _default_doctor)(project), "doctor"
-        )
+        active_phase = "doctor"
+        receipt[active_phase] = {"status": "running"}
+        doctor_result = doctor(project) if doctor is not None else _default_doctor(project)
+        receipt["doctor"] = normalize_check_result(doctor_result, "doctor")
         receipt["status"] = "success"
         receipt["ended_at"] = utc_now()
         state["status"] = "complete"
@@ -470,13 +526,9 @@ def apply(
         receipt["status"] = "rolled_back_after_failure"
         receipt["ended_at"] = utc_now()
         receipt["error"] = {"type": type(exc).__name__, "message": str(exc)}
-        if receipt["validation"].get("status") == "pending":
-            if receipt["bootstrap"].get("status") == "pending":
-                receipt["bootstrap"] = {"status": "failed", "error": str(exc)}
-            else:
-                receipt["validation"] = {"status": "failed", "error": str(exc)}
-        elif receipt["doctor"].get("status") == "pending":
-            receipt["doctor"] = {"status": "failed", "error": str(exc)}
+        phase_result = dict(receipt[active_phase])
+        phase_result.update(status="failed", error=str(exc))
+        receipt[active_phase] = phase_result
         receipt_path = write_receipt(backup, receipt)
         receipt["receipt_path"] = str(receipt_path)
         write_receipt(backup, receipt)

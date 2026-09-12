@@ -4,13 +4,16 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.migrations import (
     MigrationConflictError,
+    MigrationDetectionError,
     apply,
     plan,
     rollback,
 )
+from lib.migrations import v1_3_to_v2_0 as migration_module
 
 
 def _json(value):
@@ -121,6 +124,25 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertEqual(receipt["status"], "success")
 
+    def test_production_defaults_use_complete_project_and_doctor_boundaries(self):
+        checks = self.project / ".multicontroller/checks.json"
+        checks.write_bytes(_json({"commands": [["python", "-m", "unittest"]]}))
+        receipt = apply(self.master, self.project)
+        self.assertEqual(receipt["validation"]["validator"], "load_project+bootstrap-check")
+        self.assertEqual(receipt["doctor"]["engine"], "lib.doctor.run_doctor")
+        self.assertEqual(receipt["doctor"]["exit_code"], 0)
+        self.assertEqual(receipt["doctor"]["report_status"], "WARN")
+
+    def test_empty_checks_keep_real_doctor_failure_as_explicit_migration_exception(self):
+        receipt = apply(self.master, self.project)
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(receipt["doctor"]["status"], "accepted_pending_product_checks")
+        self.assertEqual(receipt["doctor"]["exit_code"], 1)
+        self.assertEqual(receipt["doctor"]["report_status"], "FAIL")
+        self.assertEqual(
+            receipt["doctor"]["accepted_failures"], ["required-product-checks"]
+        )
+
     def test_modified_managed_file_blocks_without_project_mutation(self):
         target = self.project / ".codex/config.toml"
         target.write_text("human change\n")
@@ -131,6 +153,15 @@ class MigrationTests(unittest.TestCase):
             apply(self.master, self.project)
         self.assertEqual(before, self.snapshot())
         self.assertFalse((self.project / "galaxy.lock").exists())
+
+    def test_partial_v2_state_is_not_reported_as_already_migrated(self):
+        (self.project / "AGENT_TEAM.yml").unlink()
+        (self.project / "galaxy.lock").write_bytes(_json({
+            "schema_version": 1,
+            "galaxy": {"version": "2.0.0", "source_revision": "manual"},
+        }))
+        with self.assertRaises(MigrationDetectionError):
+            plan(self.master, self.project)
 
     def test_tracked_codex_is_untracked_without_deleting_working_copy(self):
         _git(self.project, "init", "-q")
@@ -200,6 +231,54 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "rolled_back")
         self.assertEqual(before, self.snapshot())
         self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
+
+    def test_doctor_failure_rolls_back_with_truthful_phase_statuses(self):
+        unmanaged = self.project / ".codex/project-owned.txt"
+        unmanaged.write_bytes(b"must remain tracked and unchanged\n")
+        _git(self.project, "init", "-q")
+        _git(self.project, "add", ".")
+        before = self.snapshot()
+        before_index = (self.project / ".git/index").read_bytes()
+        with self.assertRaisesRegex(ValueError, "doctor failed"):
+            apply(self.master, self.project)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
+        paths = list((self.master / "local/migrations").glob("*/receipt.json"))
+        self.assertEqual(len(paths), 1)
+        receipt = json.loads(paths[0].read_text(encoding="utf-8"))
+        self.assertEqual(receipt["bootstrap"]["status"], "passed")
+        self.assertEqual(receipt["validation"]["status"], "passed")
+        self.assertEqual(receipt["git"]["status"], "passed")
+        self.assertEqual(receipt["doctor"]["status"], "failed")
+
+    def test_mid_untrack_failure_restores_exact_state_and_does_not_blame_doctor(self):
+        _git(self.project, "init", "-q")
+        _git(self.project, "add", ".")
+        before = self.snapshot()
+        before_index = (self.project / ".git/index").read_bytes()
+        real_run_git = migration_module.run_git
+        untrack_calls = 0
+
+        def fail_second_untrack(root, arguments, *, check=True):
+            nonlocal untrack_calls
+            if arguments and arguments[0] == "rm":
+                untrack_calls += 1
+                if untrack_calls == 2:
+                    raise ValueError("simulated mid-untrack failure")
+            return real_run_git(root, arguments, check=check)
+
+        with patch.object(migration_module, "run_git", side_effect=fail_second_untrack):
+            with self.assertRaisesRegex(ValueError, "mid-untrack"):
+                apply(self.master, self.project)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
+        paths = list((self.master / "local/migrations").glob("*/receipt.json"))
+        self.assertEqual(len(paths), 1)
+        receipt = json.loads(paths[0].read_text(encoding="utf-8"))
+        self.assertEqual(receipt["bootstrap"]["status"], "passed")
+        self.assertEqual(receipt["validation"]["status"], "passed")
+        self.assertEqual(receipt["git"]["status"], "failed")
+        self.assertEqual(receipt["doctor"]["status"], "not_run")
 
     def test_vault_is_inventory_only_and_apply_is_idempotent(self):
         vault = self.project / ".multicontroller/vault/tasks/private.md"
