@@ -25,6 +25,7 @@ class FailureClass(str, Enum):
     QUOTA = "quota"
     CAPABILITY_MISSING = "capability-missing"
     MIGRATION_CONFLICT = "migration-conflict"
+    CONTEXT_INSUFFICIENT = "context-insufficient"
 
 
 class RouteProfile(str, Enum):
@@ -176,6 +177,21 @@ class CapabilityRouter:
         quota_guard: "QuotaGuard | None" = None,
     ) -> RoutingDecision:
         effective_guard = quota_guard or self.quota_guard
+        if request.failure_class is FailureClass.CONTEXT_INSUFFICIENT:
+            if request.previous_route is None:
+                return self._normal(request, effective_guard)
+            quota_block = self._check_quota(
+                request, self.catalog.get(request.previous_route), effective_guard, "retry",
+            )
+            if quota_block:
+                return quota_block
+            return RoutingDecision(
+                RoutingAction.DISPATCH,
+                request.previous_route,
+                "expand referenced context and retry the same route before model promotion",
+                request.failure_class,
+                fresh_context=True,
+            )
         if request.failure_class in self._NO_PROMOTION:
             return RoutingDecision(
                 RoutingAction.BLOCKED,

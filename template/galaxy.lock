@@ -4,8 +4,8 @@
     "schema_version": 1
   },
   "declarations": {
-    "AGENTS.md": "b24ebbe79db0a94d3fc5764592c67ac95ed2ff82e18747c140a3c8a5215f392e",
-    ".galaxy/project.yml": "f3b920b252129f46e450dd33efea9c59f719c0612a92c3e333cc4e9e71b936e5",
+    "AGENTS.md": "69984d57a1096507c71576190e3247b59206215088bd183501f83f037e425f4b",
+    ".galaxy/project.yml": "bf9793af39d5754d4c63f13089022bee6237a05f154a3c3b07b759ecba2c2a0d",
     ".galaxy/team.yml": "bb5aca2be72c310f064223183e9e4ea82074bb17236da90fb11db2082a0722b0",
     ".galaxy/checks.json": "52edacd052b0610193043dcbe6746d595f06f246a2925424cda1a9bcafc502a4"
   },

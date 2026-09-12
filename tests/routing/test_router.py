@@ -138,6 +138,18 @@ class RouterTests(unittest.TestCase):
                 self.assertEqual(result.route, previous)
                 self.assertEqual(result.action, RoutingAction.BLOCKED)
 
+    def test_context_insufficient_expands_and_retries_same_route(self):
+        previous = Route("luna", "medium")
+        result = self.router.route(RoutingRequest(
+            task_class="implementation",
+            failure_class=FailureClass.CONTEXT_INSUFFICIENT,
+            previous_route=previous,
+        ))
+        self.assertEqual(result.action, RoutingAction.DISPATCH)
+        self.assertEqual(result.route, previous)
+        self.assertTrue(result.fresh_context)
+        self.assertIn("expand referenced context", result.reason)
+
     def test_architecture_failure_returns_to_architect(self):
         result = self.router.route(
             RoutingRequest(

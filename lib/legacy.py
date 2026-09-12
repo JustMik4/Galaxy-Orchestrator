@@ -11,6 +11,7 @@ LADDER = [('gpt-5.6-luna', 'low'), ('gpt-5.6-luna', 'medium'),
           ('gpt-5.6-luna', 'high'), ('gpt-5.6-sol', 'high'), ('gpt-6-astra', 'high')]
 CLASSES = {'implementation', 'reasoning', 'complexity', 'architecture', 'ambiguity',
            'scope', 'regression', 'infra', 'flaky', 'git'}
+CLASSES.add('context-insufficient')
 
 
 def decide(history, preset='balanced', elapsed_minutes=0, known_tokens=None, token_limit=None):
@@ -42,6 +43,8 @@ def decide(history, preset='balanced', elapsed_minutes=0, known_tokens=None, tok
         return answer('circuit_breaker', 'Aggregate budget exhausted; no additional dispatch')
     if not history: return answer('start', 'Initial bounded attempt')
     category = last['failure_class']
+    if category == 'context-insufficient':
+        return answer('fresh_agent', 'Expand referenced context and retry at the same model level')
     if category in ('infra', 'flaky', 'git'): return answer('blocked', 'Repair environment or coordination; do not promote model')
     if category in ('architecture', 'ambiguity'): return answer('root', 'Contract must be revised')
     # Budgets inferred from actual dispatch transitions, so a role rename cannot reset them.

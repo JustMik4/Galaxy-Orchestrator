@@ -44,6 +44,7 @@ LOCAL_IGNORE_PATHS = (
     ".galaxy/runtime/",
     ".galaxy/cache/",
     ".galaxy/install/",
+    ".galaxy/evidence/",
 )
 
 _SENSITIVE_KEYS = re.compile(
@@ -56,6 +57,7 @@ _GENERATED_PREFIXES = (
     ".galaxy/runtime/",
     ".galaxy/cache/",
     ".galaxy/install/",
+    ".galaxy/evidence/",
     ".agents/skills/galaxy/",
 )
 _LEGACY_PREFIXES = (
@@ -74,6 +76,7 @@ class ProjectConfig:
     adapter: str
     specialist_packs: tuple[str, ...]
     specialist_names: tuple[str, ...]
+    context_economy: Any
     vault: Mapping[str, Any]
     raw: Mapping[str, Any]
 
@@ -210,6 +213,11 @@ def _parse_project_config(raw: Mapping[str, Any]) -> ProjectConfig:
         raise ProjectConfigurationError("project.specialists must be an object")
     packs = _strings(specialists.get("packs", []), "project.specialists.packs")
     names = _strings(specialists.get("names", []), "project.specialists.names")
+    try:
+        from lib.context import parse_context_economy
+        context_economy = parse_context_economy(raw.get("context_economy"))
+    except ValueError as exc:
+        raise ProjectConfigurationError(str(exc)) from exc
     vault = raw.get("vault", {"enabled": False})
     if not isinstance(vault, dict) or not isinstance(vault.get("enabled", False), bool):
         raise ProjectConfigurationError("project.vault must be an object with boolean enabled")
@@ -227,7 +235,7 @@ def _parse_project_config(raw: Mapping[str, Any]) -> ProjectConfig:
         or ".." in pure.parts
     ):
         raise ProjectConfigurationError("tracked vault path must be project-relative; external paths are operator-local")
-    return ProjectConfig(schema, name.strip(), adapter, packs, names, vault, raw)
+    return ProjectConfig(schema, name.strip(), adapter, packs, names, context_economy, vault, raw)
 
 
 def load_project_config(path: Path) -> ProjectConfig:

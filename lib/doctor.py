@@ -43,6 +43,7 @@ REMEDIATIONS = {
     "vault": "run `galaxy vault sync PATH --check` and resolve drift before `--force`",
     "lifecycle": "review candidates with `galaxy cleanup PATH --preview`; apply only after validation",
     "env": "review and consolidate `.env.example`/`env.example`; do not auto-delete",
+    "context": "fix `.galaxy/project.yml` context_economy and run `galaxy lock sync PROJECT`",
 }
 
 
@@ -233,6 +234,30 @@ def _check_version(root: Path, project: Any, loaded: Mapping[str, Any], checks: 
     else:
         _record(checks, "version-lock", FAIL, f"Galaxy {expected} differs from galaxy.lock ({version or 'missing'})", REMEDIATIONS["bootstrap"])
     return expected
+
+
+def _check_context_economy(project: Any, checks: list[CheckRecord]) -> None:
+    if project is None:
+        _record(checks, "context-economy", UNKNOWN,
+                "context economy cannot be evaluated until declarations are valid",
+                REMEDIATIONS["context"])
+        return
+    policy = project.config.context_economy
+    details = {
+        "mode": policy.mode.value,
+        "handoff_max_summary_tokens": policy.handoff_max_summary_tokens,
+        "compress_success": policy.compress_success,
+        "preserve_failures": policy.preserve_failures,
+        "logs_inline_max_lines": policy.logs_inline_max_lines,
+        "prefer_references": policy.prefer_references,
+        "progressive_disclosure": policy.progressive_disclosure,
+        "evidence_path": ".galaxy/evidence/",
+    }
+    if policy.enabled:
+        message = f"context economy {policy.mode.value} enabled with loss-aware evidence references"
+    else:
+        message = "context economy off; full baseline behavior preserved"
+    _record(checks, "context-economy", PASS, message, details=details)
 
 
 def _check_generated(root: Path, project: Any, checks: list[CheckRecord]) -> None:
@@ -591,6 +616,7 @@ def run_doctor(project_root: str | Path, *, galaxy_version: str | None = None,
         _record(checks, "required-product-checks", PASS if project.checks.commands else FAIL,
                 "required product checks configured" if project.checks.commands else "product checks not configured",
                 None if project.checks.commands else REMEDIATIONS["checks"], {"count": len(project.checks.commands)})
+    _check_context_economy(project, checks)
     _check_generated(root, project, checks)
     _check_legacy(root, checks)
     _check_git_pollution(root, checks, generated_policy)

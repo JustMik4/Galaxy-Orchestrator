@@ -17,13 +17,13 @@ Durante a transição, o checkout de desenvolvimento pode continuar em `C:\AI\Co
 Abra PowerShell na raiz do Galaxy. Primeiro faça uma simulação:
 
 ```powershell
-python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --check
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --context-economy off --check
 ```
 
 Se o plano estiver correto, aplique:
 
 ```powershell
-python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --context-economy off
 ```
 
 `init` é um alias para a mesma instalação V2:
@@ -35,8 +35,8 @@ python .\galaxy.py init C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced
 O wrapper PowerShell também pode ser usado:
 
 ```powershell
-.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced -WhatIf
-.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced
+.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced -ContextEconomy off -WhatIf
+.\scripts\install.ps1 -ProjectPath C:\AI\Projetos\MeuProjeto -Mode SOLO -Preset balanced -ContextEconomy off
 ```
 
 `--check` na CLI e `-WhatIf` no wrapper não alteram o projeto. Os presets disponíveis são `balanced` e `critical`; os modos são `SOLO` e `CO-OP`.
@@ -63,6 +63,7 @@ Arquivos locais ou gerados:
 .galaxy/runtime/
 .galaxy/cache/
 .galaxy/install/
+.galaxy/evidence/
 ```
 
 O instalador registra exclusões locais em `.git/info/exclude` quando o projeto é Git. Ele não deve adicionar toda `.agents/` ao ignore, porque esse diretório pode conter material do próprio projeto.
@@ -85,6 +86,20 @@ Edite `.galaxy/project.yml` para selecionar routing, especialistas e, se desejad
 ```
 
 Vetores evitam dependência de parsing de shell. Não grave segredos nesses arquivos.
+
+### Economia de contexto
+
+O instalador é sempre não interativo. `--context-economy` aceita `off`,
+`balanced` ou `aggressive` e assume `off` quando omitido. O modo `off` preserva
+o comportamento integral. `balanced` é o perfil recomendado quando o usuário
+opta pela economia; `aggressive` reduz mais os orçamentos inline, mas continua
+preservando falhas, decisões, riscos, blockers e evidência referenciada.
+
+Para mudar um projeto instalado, edite `context_economy` em `project.yml` e
+execute `galaxy lock sync`. O bootstrap aceita o mesmo argumento apenas para
+conferir a configuração autenticada; divergência falha com instrução clara e
+não reescreve a declaração. Evidências compactadas são locais, deduplicadas,
+sanitizadas e ignoradas em `.galaxy/evidence/<task>/`.
 
 Esses arquivos e `AGENTS.md` são autenticados por `galaxy.lock`. Depois de revisar uma alteração intencional, confira e sincronize os hashes explicitamente:
 
@@ -135,7 +150,7 @@ Conflitos ou falhas interrompem a finalização e restauram bytes e índice Git 
 python .\galaxy.py migrate C:\AI\Projetos\Legado --rollback C:\caminho\para\receipt.json
 ```
 
-A operação é reiniciável e idempotente. Conteúdo misto em `.agents/` é preservado. Vault V1 entra apenas no inventário.
+A operação é reiniciável e idempotente. Conteúdo misto em `.agents/` é preservado. Vault V1 entra apenas no inventário. Como V1 não declarava economia de contexto, a migração grava explicitamente `context_economy.mode: off`.
 
 ## Obsidian Vault
 

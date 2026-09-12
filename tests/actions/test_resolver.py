@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from lib.actions import ActionResolver, Capability, ResolutionCode
+from lib.actions import ActionResolver, ApprovalGrant, Capability, ResolutionCode
 
 
 class ActionResolverTests(unittest.TestCase):
@@ -43,6 +43,23 @@ class ActionResolverTests(unittest.TestCase):
         decision = resolver.resolve("github.create_issue", approval=True)
         self.assertEqual(decision.code, ResolutionCode.SELECTED)
         self.assertEqual(decision.capability.kind, "browser")
+
+    def test_one_scoped_approval_covers_publication_subactions(self):
+        resolver = ActionResolver([Capability("github.publish.*", "browser", "github-web")])
+        grant = ApprovalGrant("github.publish")
+        for action in ("github.publish.create", "github.publish.push", "github.publish.ruleset"):
+            with self.subTest(action=action):
+                self.assertEqual(resolver.resolve(action, grant=grant).code, ResolutionCode.SELECTED)
+        self.assertEqual(
+            resolver.resolve("github.delete.repository", grant=grant).code,
+            ResolutionCode.BLOCKED_MISSING_CAPABILITY,
+        )
+
+    def test_capability_specific_approval_is_respected(self):
+        resolver = ActionResolver([Capability("release.publish", "api", "publisher", approval_required=True)])
+        self.assertEqual(resolver.resolve("release.publish").reason, "approval-required")
+        self.assertEqual(resolver.resolve("release.publish", grant=ApprovalGrant("release.publish")).code,
+                         ResolutionCode.SELECTED)
 
     def test_preference_override(self):
         resolver = ActionResolver([

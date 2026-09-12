@@ -73,6 +73,20 @@ class ProjectBoundaryTests(unittest.TestCase):
         self.assertEqual(project.team.mode, "SOLO")
         self.assertEqual(project.lock.galaxy_version, "2.0.0")
         self.assertEqual(project.selected_specialists, ("git",))
+        self.assertEqual(project.config.context_economy.mode.value, "off")
+
+    def test_project_context_economy_is_strictly_validated(self):
+        path = self.root / ".galaxy/project.yml"
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config["context_economy"] = {"mode": "balanced"}
+        path.write_text(json.dumps(config), encoding="utf-8")
+        update_declaration_hashes(self.root)
+        self.assertEqual(load_project(self.root).config.context_economy.mode.value, "balanced")
+        config["context_economy"] = {"mode": "balanced", "surprise": True}
+        path.write_text(json.dumps(config), encoding="utf-8")
+        update_declaration_hashes(self.root)
+        with self.assertRaisesRegex(ProjectConfigurationError, "unknown fields"):
+            load_project(self.root)
 
     def test_project_config_rejects_root_vault_path(self):
         path = self.root / '.galaxy/project.yml'

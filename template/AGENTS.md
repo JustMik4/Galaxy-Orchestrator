@@ -7,7 +7,7 @@ instruction file as project-owned declarations.
 Run `galaxy bootstrap . --check` to verify the local Codex projection and
 `galaxy validate . --gate` for the `galaxy / validate` integration check.
 Generated `.codex` files and `.galaxy/local`, `.galaxy/runtime`,
-`.galaxy/cache`, and `.galaxy/install` are local artifacts and must remain
+`.galaxy/cache`, `.galaxy/install`, and `.galaxy/evidence` are local artifacts and must remain
 untracked. Do not ignore all of `.agents`; project-owned agent instructions
 may be tracked there.
 
@@ -28,3 +28,18 @@ match, and persist new completed evidence with `galaxy dispatch review-record`.
 
 The optional Obsidian vault declaration is disabled by default. Vault sync is
 always explicit and must not export prompts, responses, telemetry, or secrets.
+
+Context economy is an explicit project setting and defaults to `off`. In
+`balanced` or `aggressive` mode, keep handoffs structured, persist sanitized
+overflow under `.galaxy/evidence/<task>/`, refer to stable evidence instead of
+retransmitting it, and expand references before treating missing context as a
+model failure. Never compact failure identity, location, message, blockers,
+risks, decisions, or validation evidence. Context metrics and account quota are
+separate signals.
+
+Do not ask for confirmation for read-only work, normal implementation steps,
+or local reversible changes already requested by the user, including a planned
+project rename. For an external publication, treat the user's explicit publish
+request as authorization for the complete declared batch. Ask once only when a
+new irreversible/public scope, credentials, permissions, or browser fallback is
+actually required; one approval covers all named sub-actions in that scope.

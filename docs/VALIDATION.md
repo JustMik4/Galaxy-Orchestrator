@@ -122,11 +122,18 @@ git status --short
 
 Também execute as suítes focadas de routing/quota, runtime/review, specialists, bootstrap, migration, doctor/actions, lifecycle, resources e vault quando uma dessas áreas mudar.
 
+Para economia de contexto, a aceitação adicional cobre: baseline `off` sem
+compactação, presets `balanced`/`aggressive`, orçamento de handoff, preservação
+de falhas, evidência sanitizada, deduplicação, progressive disclosure, migração
+V1 em `off`, Doctor e retry da mesma rota para `context-insufficient`. Ganho de
+tokens ou quota só pode ser alegado depois de benchmark A/B repetível; a suíte
+funcional prova contratos, não percentual de economia.
+
 ## Evidência integrada de 2026-09-12
 
 No checkout V2 integrado em Windows:
 
-- `python -m unittest discover -s tests -v`: **295 testes executados**, **291 passaram**, zero falhas e quatro skips;
+- `python -m unittest discover -s tests -v`: **311 testes executados**, **307 passaram**, zero falhas e quatro skips;
 - os skips foram somente três casos que criam symlink real, indisponível sem o privilégio do Windows (`WinError 1314`), e a integração de corrida POSIX que não se aplica ao host Windows; testes de junction/reparse sem esse privilégio, identidade de diretório e revisão estática permaneceram cobertos;
 - `python -m compileall -q lib tests galaxy.py multicontroller.py`: passou;
 - sincronização explícita do lock, incluindo snapshot autenticado, clone `autocrlf`, concorrência, staging e promoção por handle: passou;
@@ -135,12 +142,13 @@ No checkout V2 integrado em Windows:
 - `git diff --check`: passou.
 
 O smoke V1.3→V2 mais recente usou o clone local descartável
-`C:\AI\Galaxy-Lexy-Smoke-20260912-terminal` do `HEAD` `6a2cd68` da Lexy. A árvore original,
+`C:\AI\Galaxy-Lexy-Smoke-20260912-context` do `HEAD` `6a2cd68` da Lexy. A árvore original,
 que continha `M tests/test_event_bus.py`, permaneceu intocada no mesmo commit. Preview e aplicação
 terminaram com status `success`; o receipt foi gravado em
-`local/migrations/eef9defffada49eeb4ff525d9396c05d/receipt.json` do master. O bootstrap posterior em
-`--check` ficou sem create/update/remove/drift e sem poluição rastreada. O Doctor retornou zero `FAIL`,
-17 `PASS`, dois `WARN` esperados (resíduos V1 locais e templates de
+`local/migrations/fbed67fc2ab2449cb990151cb31badf0/receipt.json` do master. A migração
+declarou `context_economy.mode: off`; o bootstrap posterior em `--check`, com a mesma seleção explícita,
+ficou sem create/update/remove/drift e sem poluição rastreada. O Doctor retornou zero `FAIL`,
+18 `PASS`, dois `WARN` esperados (resíduos V1 locais e templates de
 ambiente duplicados) e três `UNKNOWN` honestos (runtime, quota e action capability não fornecidos).
 No clone migrado, a suíte do produto passou com **284 testes** e `pip check` informou zero dependências
 quebradas.

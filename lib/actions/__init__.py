@@ -2,6 +2,7 @@
 
 from .resolver import (
     ActionResolver,
+    ApprovalGrant,
     Capability,
     CapabilityInventory,
     Decision,
@@ -11,6 +12,6 @@ from .resolver import (
 )
 
 __all__ = [
-    "ActionResolver", "Capability", "CapabilityInventory", "Decision",
+    "ActionResolver", "ApprovalGrant", "Capability", "CapabilityInventory", "Decision",
     "ResolutionCode", "github_capabilities", "resolve_action",
 ]

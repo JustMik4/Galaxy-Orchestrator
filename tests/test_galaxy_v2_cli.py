@@ -106,6 +106,25 @@ class GalaxyV2CliTests(unittest.TestCase):
         team = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
         self.assertEqual(team["mode"], "SOLO")
         self.assertTrue((self.project / ".codex/config.toml").is_file())
+        project = json.loads((self.project / ".galaxy/project.yml").read_text(encoding="utf-8"))
+        self.assertEqual(project["context_economy"], {"mode": "off"})
+
+    def test_install_selects_context_economy_without_prompt(self):
+        result = self.run_cli("install", self.project, "--context-economy", "balanced")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["context_economy"], "balanced")
+        self.assertEqual(load_project(self.project).config.context_economy.mode.value, "balanced")
+
+    def test_bootstrap_context_argument_checks_authenticated_configuration(self):
+        self.assertEqual(self.run_cli(
+            "install", self.project, "--context-economy", "aggressive"
+        ).returncode, 0)
+        matched = self.run_cli("bootstrap", self.project, "--context-economy", "aggressive", "--check")
+        self.assertEqual(matched.returncode, 0, matched.stderr)
+        mismatch = self.run_cli("bootstrap", self.project, "--context-economy", "balanced")
+        self.assertEqual(mismatch.returncode, 1)
+        self.assertIn("does not match authenticated project.yml", mismatch.stderr)
 
     def test_coop_install_renders_canonical_coordination_without_v1_runtime(self):
         result = self.run_cli("install", self.project, "--mode", "CO-OP")
@@ -609,13 +628,14 @@ class GalaxyV2CliTests(unittest.TestCase):
         result = subprocess.run([
             "pwsh", "-NoProfile", "-File", str(ROOT / "scripts/install.ps1"),
             "-ProjectPath", str(self.project), "-Mode", "CO-OP",
-            "-Preset", "critical",
+            "-Preset", "critical", "-ContextEconomy", "aggressive",
         ], text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         team = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
         project = json.loads((self.project / ".galaxy/project.yml").read_text(encoding="utf-8"))
         self.assertEqual(team["mode"], "CO-OP")
         self.assertEqual(project["routing"]["profile"], "critical")
+        self.assertEqual(project["context_economy"]["mode"], "aggressive")
 
         update = subprocess.run([
             "pwsh", "-NoProfile", "-File", str(ROOT / "scripts/update.ps1"),
@@ -635,7 +655,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertIn("user-local.txt\n", policy)
         for relative in (
             ".codex/", ".galaxy/local/", ".galaxy/runtime/",
-            ".galaxy/cache/", ".galaxy/install/",
+            ".galaxy/cache/", ".galaxy/install/", ".galaxy/evidence/",
         ):
             self.assertIn(relative, policy)
         self.assertNotIn(".agents/", policy)

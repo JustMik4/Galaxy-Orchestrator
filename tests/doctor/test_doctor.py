@@ -64,6 +64,21 @@ class DoctorTests(unittest.TestCase):
         )
         self.assertEqual(report.exit_code, 0)
         self.assertFalse(report.failed)
+        context = next(item for item in report.checks if item.id == "context-economy")
+        self.assertEqual(context.status, CheckStatus.PASS)
+        self.assertEqual(context.details["mode"], "off")
+
+    def test_doctor_reports_enabled_context_economy(self):
+        path = self.root / ".galaxy/project.yml"
+        config = json.loads(path.read_text())
+        config["context_economy"] = {"mode": "balanced"}
+        path.write_text(json.dumps(config))
+        self._refresh_declaration_hashes()
+        report = run_doctor(self.root, galaxy_version="2.0.0")
+        context = next(item for item in report.checks if item.id == "context-economy")
+        self.assertEqual(context.status, CheckStatus.PASS)
+        self.assertEqual(context.details["mode"], "balanced")
+        self.assertTrue(context.details["progressive_disclosure"])
 
     def test_remediation_commands_include_required_project_path(self):
         self.assertEqual(

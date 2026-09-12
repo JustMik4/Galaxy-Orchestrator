@@ -116,3 +116,4 @@ local/
 .galaxy/runtime/
 .galaxy/cache/
 .galaxy/install/
+.galaxy/evidence/

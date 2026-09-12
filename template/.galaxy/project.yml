@@ -1,5 +1,8 @@
 {
   "adapter": "codex",
+  "context_economy": {
+    "mode": "off"
+  },
   "name": "project",
   "routing": {
     "profile": "balanced"

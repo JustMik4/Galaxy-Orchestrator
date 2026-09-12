@@ -12,6 +12,13 @@ A publicação V2 inclui versão, código, documentação, identidade local e id
 
 Não renomeie a pasta enquanto um shell, agente ou subprocesso estiver usando-a como diretório atual.
 
+O pedido explícito do usuário para renomear/publicar autoriza o lote descrito
+neste documento. Não peça nova confirmação para cada passo, para checks
+somente-leitura ou para a renomeação local reversível. Se faltar autenticação,
+permissão ou for necessário usar navegador, peça uma única aprovação que nomeie
+o escopo completo (`github.publish`); o mesmo grant cobre criação/rename, push,
+tag, release e ruleset daquele lote, mas não exclusão ou outro repositório.
+
 ## 2. Executar a aceitação final
 
 ```powershell
@@ -66,7 +73,7 @@ JustMik4/Galaxy-Multicontroller
 → JustMik4/Galaxy-Orchestrator
 ```
 
-Use o Action Resolver: aplicativo/conector/plugin GitHub, depois `gh`, API oficial e navegador apenas com aprovação explícita. Antes da ação, confirme proprietário, repositório, branch padrão, workflows, environments e rulesets. Depois, verifique a URL retornada pela própria capability.
+Use o Action Resolver: aplicativo/conector/plugin GitHub, depois `gh`, API oficial e navegador apenas com uma aprovação escopada quando realmente necessário. Verifique proprietário, repositório, branch padrão, workflows, environments e rulesets por leitura automática; só peça dados ao usuário se uma ambiguidade material permanecer. Depois, verifique a URL retornada pela própria capability.
 
 Atualize o remote somente após confirmar a renomeação:
 

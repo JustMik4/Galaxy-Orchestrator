@@ -22,6 +22,42 @@ Cada dispatch, retry ou escalation chama `dispatch authorize` antes de iniciar o
 
 Contratos continuam exigindo DAG acíclico, escopos literais, um escritor por escopo, worktree isolado, revisão independente quando aplicável, CI da versão atual e integração pela autoridade serializada. Estado CO-OP autoritativo é o coordenador serializado (Issue/workflow e receipts), nunca uma nota Markdown ou inferência de branch.
 
+## Economia de contexto
+
+Economia de contexto é política de transmissão interna, independente de quota.
+Sua declaração canônica em `.galaxy/project.yml` é:
+
+```yaml
+context_economy:
+  mode: off                    # off | balanced | aggressive
+  handoff: {max_summary_tokens: 350}
+  tool_output: {compress_success: true, preserve_failures: true}
+  logs: {inline_max_lines: 80}
+  evidence: {prefer_references: true}
+  specialists: {progressive_disclosure: true}
+```
+
+Campos omitidos usam o preset do modo. `off` é o padrão compatível e não aceita
+overrides de compactação. `balanced` usa por padrão 350 tokens aproximados no
+handoff e 80 linhas; `aggressive`, 200 e 40. Esses limites não autorizam perda
+de STATUS, BLOCKERS, RISKS, HEAD, decisões, identidade/mensagem/localização de
+falhas ou evidência de validação. Overflow completo e sanitizado é persistido
+em `.galaxy/evidence/<task>/` e transmitido por path e SHA-256; conteúdo idêntico
+é deduplicado. Referências e corpos de especialistas são expandidos sob demanda.
+
+O relatório de agente usa exatamente `STATUS`, `CHANGED`, `TESTS`, `DECISIONS`,
+`BLOCKERS`, `RISKS`, `EVIDENCE` e `HEAD`. Saída bem-sucedida extensa pode virar
+resumo mais referência; em falha, nomes, mensagens, locais e excertos relevantes
+ficam inline. Redação de credenciais precede persistência. Telemetria mede tokens
+estimados de entrada/saída, itens compactados, referências reutilizadas, bytes de
+evidência e retries por contexto; jamais converte isso em quota ou publica uma
+alegação de economia sem benchmark A/B.
+
+`context-insufficient` não alimenta reputação negativa: expande evidência e
+repete a rota atual antes de promoção. A migração V1 grava `off`. O Doctor relata
+o modo efetivo e suas garantias. A implementação é nativa em `lib/context/`, sem
+hook, proxy ou dependência Caveman.
+
 ## Layout e autoridade do vault Obsidian
 
 O vault é uma projeção opcional por projeto, destinada à visibilidade e ao controle humano das tarefas. Não é requisito de bootstrap nem dependência de execução.
@@ -76,9 +112,9 @@ Comandos aceitam caminhos como argumentos posicionais, sem concatenação de she
 relatórios estruturados escrevem JSON por padrão; o Doctor oferece `--json` explicitamente:
 
 ```text
-galaxy install PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]
-galaxy init PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]
-galaxy bootstrap PROJECT [--check]
+galaxy install PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--context-economy off|balanced|aggressive] [--check]
+galaxy init PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--context-economy off|balanced|aggressive] [--check]
+galaxy bootstrap PROJECT [--context-economy off|balanced|aggressive] [--check]
 galaxy migrate PROJECT [--preview | --rollback RECEIPT]
 galaxy validate PROJECT [--gate]
 galaxy doctor PROJECT [--json]
@@ -100,6 +136,12 @@ Action Resolver e Resource Catalog são APIs internas nesta versão. Não há co
 `specialist explain`, `vault export` ou `doctor --fix-safe`; documentação e automação não devem presumir
 superfícies que a CLI não registra. Roteamento operacional e revisão são públicos exclusivamente pela
 família `galaxy dispatch` listada acima.
+
+O Action Resolver privilegia capabilities programáticas sem confirmação extra.
+Uma solicitação explícita do usuário autoriza passos locais reversíveis e o lote
+externo nomeado. Browser, credencial/permissão ausente ou novo efeito público e
+irreversível exigem uma única aprovação escopada; esse grant cobre todas as
+subações declaradas do lote e não pode autorizar outro namespace destrutivo.
 
 ## Lock, bootstrap e migração
 

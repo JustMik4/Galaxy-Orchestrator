@@ -22,6 +22,7 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 - cache de revisão por fingerprint de evidência para evitar revisões idênticas;
 - limite operacional público de despacho: autorização antes de dispatch/retry/escalation, verificação do runtime efetivo e consulta de cache antes de revisão dispendiosa;
 - especialistas com fonte Markdown/frontmatter, catálogo frio, hot set e materialização determinística.
+- economia de contexto nativa e opt-in (`off`, `balanced`, `aggressive`), com handoffs estruturados, referências deduplicadas, progressive disclosure e retry `context-insufficient` sem penalizar o modelo;
 
 ### Operação e segurança
 
@@ -32,7 +33,7 @@ As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especifi
 - Galaxy Doctor para configuração, lock, bootstrap, Git, legado, checks, runtime, quota, ações, Vault e ciclo de vida;
 - Lifecycle Manager com preview padrão e aplicação explícita;
 - limpeza endurecida contra links/reparse e troca após preview, com estágio e reverificação em POSIX e handle verificado no Windows;
-- Action Resolver com navegador apenas após aprovação explícita;
+- Action Resolver com grant escopado único para navegador/efeitos externos, evitando confirmações repetidas dentro do mesmo lote autorizado;
 - Resource Catalog local e determinístico, com importador offline de candidatos `public-apis` não verificados;
 - projeção opcional em Obsidian Vault, desativada por padrão e com exclusões de privacidade.
 - sync de Vault habilitado somente com envelope autoritativo versionado e conjunto de autoridade correspondente.

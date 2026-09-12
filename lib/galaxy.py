@@ -106,9 +106,9 @@ def main(argv: list[str] | None = None) -> int:
             "Galaxy Orchestrator\n\n"
             "usage: galaxy COMMAND [OPTIONS]\n\n"
             "V2 commands:\n"
-            "  install PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]\n"
-            "  init PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--check]\n"
-            "  bootstrap PROJECT [--check]\n"
+            "  install PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--context-economy off|balanced|aggressive] [--check]\n"
+            "  init PROJECT [--mode SOLO|CO-OP] [--preset balanced|critical] [--context-economy off|balanced|aggressive] [--check]\n"
+            "  bootstrap PROJECT [--context-economy off|balanced|aggressive] [--check]\n"
             "  migrate PROJECT [--preview | --rollback RECEIPT]\n"
             "  validate PROJECT [--gate]\n"
             "  doctor PROJECT [--json]\n"
@@ -413,9 +413,18 @@ def main(argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(prog="galaxy bootstrap")
         parser.add_argument("project")
         parser.add_argument("--check", action="store_true")
+        parser.add_argument("--context-economy", choices=("off", "balanced", "aggressive"))
         options = parser.parse_args(arguments[1:])
         try:
             from .bootstrap import bootstrap
+            if options.context_economy is not None:
+                from .project import load_project
+                configured = load_project(options.project).config.context_economy.mode.value
+                if configured != options.context_economy:
+                    raise ValueError(
+                        "--context-economy does not match authenticated project.yml "
+                        f"({configured}); edit the declaration and run `galaxy lock sync PROJECT`"
+                    )
             result = bootstrap(options.project, check=options.check)
             payload = {"command": "bootstrap", **asdict(result)}
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
@@ -430,12 +439,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--check", action="store_true")
         parser.add_argument("--mode", choices=("SOLO", "CO-OP"), default="SOLO")
         parser.add_argument("--preset", choices=("balanced", "critical"), default="balanced")
+        parser.add_argument("--context-economy", choices=("off", "balanced", "aggressive"), default="off")
         options = parser.parse_args(arguments[1:])
         try:
             from .installer import install_v2
             result = install_v2(
                 Path(__file__).resolve().parents[1], options.project,
                 check=options.check, mode=options.mode, preset=options.preset,
+                context_economy=options.context_economy,
             )
             result["command"] = command
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

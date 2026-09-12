@@ -208,7 +208,7 @@ def merge_gitattributes(original, canonical):
     return project_content + separator + block
 
 
-def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
+def install_v2(master, project, check=False, mode='SOLO', preset='balanced', context_economy='off'):
     """Install the canonical V2 project snapshot and local Codex projection.
 
     All bytes are rendered in an isolated staging directory first.  Occupied
@@ -224,6 +224,8 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
         raise ValueError('invalid V2 mode')
     if preset not in ('balanced', 'critical'):
         raise ValueError('invalid V2 preset')
+    if context_economy not in ('off', 'balanced', 'aggressive'):
+        raise ValueError('invalid context economy mode')
 
     with tempfile.TemporaryDirectory(prefix='galaxy-install-') as temporary:
         stage = Path(temporary)
@@ -253,6 +255,7 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
         project_path = stage / '.galaxy/project.yml'
         project_config = json.loads(project_path.read_text(encoding='utf-8'))
         project_config['routing'] = {'profile': preset}
+        project_config['context_economy'] = {'mode': context_economy}
         project_path.write_bytes(encoded(project_config))
         lock_path = stage / 'galaxy.lock'
         lock = json.loads(lock_path.read_text(encoding='utf-8'))
@@ -307,6 +310,7 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
             'check': bool(check),
             'mode': mode,
             'preset': preset,
+            'context_economy': context_economy,
             'changed': sorted(changes),
             'configuration': 'valid',
         }
@@ -558,10 +562,12 @@ def main():
     p.add_argument('--master', default=str(Path(__file__).resolve().parents[1]))
     p.add_argument('--mode', choices=['SOLO','CO-OP'], default='SOLO')
     p.add_argument('--preset', choices=['balanced','critical'], default='balanced')
+    p.add_argument('--context-economy', choices=['off','balanced','aggressive'], default='off')
     p.add_argument('--preview', action='store_true')
     a = p.parse_args()
     try:
-        print(json.dumps(install(Path(a.master), Path(a.project), a.mode, a.preset, a.preview),indent=2))
+        print(json.dumps(install_v2(Path(a.master), Path(a.project), check=a.preview, mode=a.mode,
+                                    preset=a.preset, context_economy=a.context_economy),indent=2))
         return 0
     except (OSError, ValueError, KeyError) as exc:
         print('ERROR: '+str(exc), file=sys.stderr)

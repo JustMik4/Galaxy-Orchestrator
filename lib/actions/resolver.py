@@ -14,6 +14,20 @@ class ResolutionCode:
     BLOCKED_MISSING_CAPABILITY = "BLOCKED_MISSING_CAPABILITY"
 
 
+@dataclass(frozen=True)
+class ApprovalGrant:
+    """One explicit approval covering an action and all of its sub-actions."""
+
+    scope: str
+
+    def __post_init__(self):
+        if not isinstance(self.scope, str) or not self.scope.strip():
+            raise ValueError("approval grant scope is required")
+
+    def covers(self, action: str) -> bool:
+        return action == self.scope or action.startswith(self.scope.rstrip(".*") + ".")
+
+
 # Values earlier in this sequence win. connector/plugin/mcp are intentionally
 # equivalent ranks: their stable input order is the final tie breaker.
 _DEFAULT_RANK = {"native": 0, "connected-app": 0, "connector": 1,
@@ -101,7 +115,9 @@ class ActionResolver:
         self.inventory = capabilities if isinstance(capabilities, CapabilityInventory) else CapabilityInventory(capabilities)
         self.preferences = dict(preferences or {})
 
-    def resolve(self, action: str, *, approval: bool = False, preference: Optional[Iterable[str]] = None) -> Decision:
+    def resolve(self, action: str, *, approval: bool = False,
+                grant: ApprovalGrant | None = None,
+                preference: Optional[Iterable[str]] = None) -> Decision:
         candidates = [c for c in self.inventory.for_action(action) if c.usable()]
         override = tuple(preference if preference is not None else self.preferences.get(action, ()))
         if override:
@@ -111,17 +127,19 @@ class ActionResolver:
         else:
             candidates.sort(key=lambda c: (_DEFAULT_RANK.get(c.kind, 99), c.id))
         considered = tuple(c.id for c in candidates)
+        approved = bool(approval or (grant is not None and grant.covers(action)))
         for capability in candidates:
-            if capability.kind == "browser" and not approval:
+            if (capability.kind == "browser" or capability.approval_required) and not approved:
                 continue
             return Decision(action, ResolutionCode.SELECTED, capability, considered=considered)
-        browser_seen = any(c.kind == "browser" for c in candidates)
-        reason = "approval-required" if browser_seen else "no-usable-capability"
+        approval_seen = any(c.kind == "browser" or c.approval_required for c in candidates)
+        reason = "approval-required" if approval_seen else "no-usable-capability"
         return Decision(action, ResolutionCode.BLOCKED_MISSING_CAPABILITY, reason=reason, considered=considered)
 
 
-def resolve_action(action: str, capabilities: Iterable[Capability] = (), *, approval: bool = False, preferences=None) -> Decision:
-    return ActionResolver(capabilities, preferences).resolve(action, approval=approval)
+def resolve_action(action: str, capabilities: Iterable[Capability] = (), *, approval: bool = False,
+                   grant: ApprovalGrant | None = None, preferences=None) -> Decision:
+    return ActionResolver(capabilities, preferences).resolve(action, approval=approval, grant=grant)
 
 
 def _coerce_capability(value):

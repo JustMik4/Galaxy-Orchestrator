@@ -152,6 +152,7 @@ def _project_bytes(project: Path, policy: Mapping[str, Any]) -> bytes:
         "schema_version": 1,
         "name": project.name,
         "adapter": "codex",
+        "context_economy": {"mode": "off"},
         "specialists": {"packs": ["core"], "names": []},
         "policy": migrated_policy,
         "vault": {
@@ -218,6 +219,7 @@ def _ignore_bytes(project: Path) -> bytes:
         b".galaxy/runtime/\n"
         b".galaxy/cache/\n"
         b".galaxy/install/\n"
+        b".galaxy/evidence/\n"
     )
     separator = b"" if not original or original.endswith(b"\n") else b"\n"
     return original + separator + rules
