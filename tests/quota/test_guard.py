@@ -10,7 +10,7 @@ from lib.quota import (
     QuotaState,
     UnknownTelemetryPolicy,
 )
-from lib.operator import load_operator_policy
+from lib.operator_config import load_operator_policy
 
 
 class QuotaGuardTests(unittest.TestCase):

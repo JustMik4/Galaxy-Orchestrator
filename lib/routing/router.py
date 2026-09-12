@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 from .catalog import CapabilityCatalog, ModelCapability, Route
 from lib.quota import QuotaGuard, QuotaSnapshot
-from lib.operator import load_operator_quota_guard
+from lib.operator_config import load_operator_quota_guard
 
 
 class FailureClass(str, Enum):

@@ -1,4 +1,4 @@
-"""Read-only local operator preferences.
+"""Read-only local operator preferences without shadowing Python's operator module.
 
 Operator preferences are account-local and must never become project state.
 Only the quota guard section is interpreted here; unknown fields fail closed
