@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "galaxy": {
+      "type": "builtin",
+      "trust": "builtin"
+    }
+  },
+  "specialists": [
+    "core",
+    "git",
+    "github-actions",
+    "python-debugging",
+    "python-testing",
+    "windows-powershell"
+  ]
+}
