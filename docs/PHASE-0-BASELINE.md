@@ -8,11 +8,11 @@ O baseline foi levantado antes da implementação V2, comparando o plano `GALAXY
 
 ## Repositório e árvore
 
-O clone local agora possui histórico Git do upstream `JustMik4/Galaxy-Multicontroller`, mas a árvore de trabalho não está limpa: `.gitignore` e `README.md` têm modificações, `LICENSE` e `docs/INSTALLATION.md` aparecem removidos localmente, e há `RELEASE-MANIFEST.json` e `tests/pressure-scenarios/` não rastreados. Essas alterações preexistentes não foram sobrescritas. O baseline de arquivos do release registra 85 arquivos com hashes esperados; os extras observados são bytecodes/cache e backups locais, quando presentes.
+O clone local agora possui histórico Git do upstream `JustMik4/Galaxy-Multicontroller`. A comparação com o pacote V1.3 encontrou código, templates e testes semanticamente idênticos; as diferenças eram apenas de empacotamento (`README`, `.gitignore`, manifesto, cenários de pressão, `LICENSE` e guia de instalação). Elas foram preservadas/reconciliadas em um commit de baseline antes da implementação. O manifesto do release registra 85 arquivos com hashes esperados; os extras observados são bytecodes/cache e backups locais, quando presentes.
 
 ## Estado V1 observado
 
-V1.3 contém CLI/helpers determinísticos, installer com preview/manifest/drift/backup/rollback, coordenador CO-OP serializado, presets e testes para contratos, DAG, ownership, gates, recuperação, instalação e migração. `local/operator.toml` não é distribuído. A documentação histórica registra 52/52 testes, mas a execução atual deve ser repetida pela raiz antes do primeiro commit V2; o teste PowerShell pode falhar em máquinas com `Zone.Identifier` sob `RemoteSigned`, sem alterar a política global.
+V1.3 contém CLI/helpers determinísticos, installer com preview/manifest/drift/backup/rollback, coordenador CO-OP serializado, presets e testes para contratos, DAG, ownership, gates, recuperação, instalação e migração. `local/operator.toml` não é distribuído. A primeira execução encontrou 51/52 porque scripts extraídos carregavam `Zone.Identifier` sob `RemoteSigned`. Após remover somente essa marca de download dos três scripts locais, sem mudar a política global nem bytes versionados, os 52 testes V1 passaram.
 
 ## Lacunas V2 registradas
 
@@ -31,4 +31,3 @@ O vault Obsidian é **opcional**, configurável por projeto e sempre projection 
 - Baseline de testes e limitações reais preservados, sem falsificar 52/52.
 - Nenhuma alteração em `lib/`, `tests/` ou templates nesta fase.
 - Próxima fase começa por testes de roteamento/quota e não por rename físico da instalação.
-
