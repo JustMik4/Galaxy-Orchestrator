@@ -1,0 +1,93 @@
+# Galaxy Orchestrator V2 — especificação canônica
+
+Este documento é a especificação executável de V2. Ele traduz o plano de atualização em contratos verificáveis e incorpora o vault opcional para Obsidian. A [SPEC-V1](SPEC-V1.md) permanece histórica; quando houver conflito, esta especificação prevalece para projetos V2.
+
+## Identidade e compatibilidade
+
+- Produto e CLI: **Galaxy Orchestrator** / `galaxy`.
+- Repositório-alvo: `JustMik4/Galaxy-Orchestrator`; instalação futura: `C:\AI\Galaxy-Orchestrator`.
+- Configuração de projeto rastreada: `.galaxy/project.yml`, `.galaxy/team.yml`, `.galaxy/checks.json` e `galaxy.lock`.
+- `AGENT_TEAM.yml` migra semanticamente para `.galaxy/team.yml`; `multicontroller.py` permanece apenas como wrapper de depreciação.
+- `.multicontroller/` e branches `codex/*` são reconhecidos somente para compatibilidade/migração; novos projetos usam `.galaxy/` e branches `galaxy/*`.
+- `.codex/`, runtime, cache, instalação local e artefatos gerados são locais/não rastreados por padrão.
+- Provedores LLM externos não fazem parte desta versão.
+
+## Princípios
+
+Role, specialist, model/effort e action capability são dimensões independentes. Há poucos roles operacionais (`root`, `explorer`, `researcher`, `worker`, `hard-worker`, `tester`, `reviewer`, `architect`) e especialistas Markdown carregados sob demanda. O root normal é Sol Medium; Sol High e Astra são escalonamentos justificados, e Astra nunca é root permanente.
+
+O Capability Router escolhe o menor custo esperado que satisfaça risco, histórico, capacidade observada do host e quota. O Emergency Router pode mudar modelo, effort ou contexto, mas exige evidência e nunca ignora a reserva de quota. O Runtime Verifier registra o modelo/effort realmente executados; configuração declarada não é evidência de execução.
+
+Contratos continuam exigindo DAG acíclico, escopos literais, um escritor por escopo, worktree isolado, revisão independente quando aplicável, CI da versão atual e integração pela autoridade serializada. Estado CO-OP autoritativo é o coordenador serializado (Issue/workflow e receipts), nunca uma nota Markdown ou inferência de branch.
+
+## Layout e autoridade do vault Obsidian
+
+O vault é uma projeção opcional por projeto, destinada à visibilidade e ao controle humano das tarefas. Não é requisito de bootstrap nem dependência de execução.
+
+Configuração rastreada, sem caminhos absolutos ou segredos, em `.galaxy/project.yml`:
+
+```yaml
+vault:
+  enabled: false
+  # relativo ao projeto; para vault externo, use caminho configurado localmente
+  path: .galaxy/vault
+  mode: projection       # projection | project-owned
+  sync: manual            # manual | on-event | on-command
+  include: [tasks, milestones, summaries]
+  exclude: [prompts, responses, telemetry, secrets]
+```
+
+`enabled: true` permite um vault interno (`.galaxy/vault/`) ou externo. Caminho externo e preferências do operador ficam em `.galaxy/local/operator.toml` (não rastreado); o lock registra apenas a forma normalizada da configuração, nunca o caminho privado. O caminho deve ser validado como absoluto conhecido, sem traversal, symlink/reparse point ou ser pai/filho do repositório de forma ambígua.
+
+### Arquivos e rastreamento
+
+- `project-owned`: notas/declarations explicitamente mantidas pelo projeto podem ser rastreadas e editadas pelo usuário; seu schema é validado. Ainda assim, o estado vivo de claim/revision/receipt continua no coordenador.
+- `projection`: notas geradas determinísticas (`tasks/`, `milestones/`, `summaries/`) são derivadas de estado e devem ser ignoradas pelo Git, salvo opt-in explícito do projeto. Nunca conterão prompts completos, respostas, tokens, credenciais, caminhos pessoais ou telemetria bruta.
+- `.galaxy/vault/.gitignore` deve ignorar saídas geradas; o bootstrap não deve capturar um vault externo nem copiar dados pessoais.
+- Frontmatter mínimo: `galaxy_schema`, `task_id`, `revision`, `status`, `owner`, `updated_at` UTC e `source_receipt`; conteúdo humano fica após um marcador reservado.
+
+### Sincronização e conflitos
+
+O sincronizador lê snapshots do coordenador e produz a mesma árvore para o mesmo estado, configuração e versão. Ordenação, timestamps derivados e serialização são determinísticos; `updated_at` de projeção vem do evento-fonte, não do relógio local. Cada nota traz `source_receipt`/revision para impedir downgrade.
+
+Em `projection`, edição humana na área gerada é sobrescrita somente com `--force` após backup; por padrão o sync recusa e relata drift. Em `project-owned`, alterações concorrentes ou revision incompatível geram `migration-conflict`/`vault-conflict`, preservam ambos os conteúdos (`*.conflict-*`) e exigem resolução explícita; nunca fazem merge semântico por LLM. Enquanto houver conflito, o coordenador permanece autoritativo e nenhuma claim/merge é inferida da nota. Offline, o vault pode ser lido/editado, mas publicação exige `galaxy vault sync` e validação do receipt atual.
+
+### Privacidade
+
+Vault externo pode estar em área pessoal e não deve ser assumido como repositório Git. Exclusões são deny-by-default: prompts, respostas, segredos, `.env`, tokens, identificadores de conta, logs pessoais e conteúdo fora dos campos permitidos não são projetados. `galaxy doctor` sinaliza permissões excessivas, path fora da intenção, notas não rastreadas suspeitas e padrões de segredo; não envia conteúdo. O usuário controla habilitação, include/exclude e remoção do vault.
+
+## Comandos V2
+
+Comandos devem aceitar caminhos como argumentos (sem shell concatenado) e oferecer `--json` para automação:
+
+```text
+galaxy init [--mode SOLO|CO-OP] [--preset balanced|critical]
+galaxy bootstrap --project PATH [--what-if]
+galaxy route TASK.json
+galaxy specialist list|explain TASK.json
+galaxy vault status --project PATH
+galaxy vault sync --project PATH [--check|--force]
+galaxy vault export TASK_ID --project PATH
+galaxy doctor --project PATH [--fix-safe]
+galaxy migrate --project PATH [--what-if|--rollback RECEIPT]
+galaxy validate --project PATH
+```
+
+`vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report. A sincronização não despacha agentes nem altera claims. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
+
+## Lock, bootstrap e migração
+
+`galaxy.lock` fixa versão do schema, release, hashes de declarações/especialistas/adapters e política efetiva. Fresh clone + bootstrap recria runtime Codex local sem vendorizar ferramentas no produto. O bootstrap não altera config global, login ou trust.
+
+Migração V1→V2 é semântica e restartável: preflight/preview, classificação (gerenciado, projeto-owned, gerado modificado), backup fora do projeto, aplicação, validação, receipt durável e rollback explícito. `AGENT_TEAM.yml` → `.galaxy/team.yml`, `.multicontroller/` → `.galaxy/` e workflows/checks têm regras próprias; nunca há substituição global de strings. Vaults V1, se encontrados, são apenas inventariados até o usuário escolher projeção ou declarations project-owned. Conflitos bloqueiam o commit da migração, preservando origem e destino.
+
+## Testes e aceitação
+
+Além dos invariantes V1, V2 exige testes RED→GREEN para: catálogo/roteamento por capacidade; emergency e quota hard stop; verificação de modelo/effort; fingerprint/cache de review; parsing/adapters especialistas; bootstrap sem runtime vendorizado; migração preview/backup/rollback/receipt; Doctor e pollution detector; Action Resolver; lifecycle; e SOLO/CO-OP.
+
+Vault exige testes para: disabled/no-op; path interno e externo; projeção determinística byte-a-byte; filtro de privacidade; frontmatter/schema; drift e `--force`; revision/receipt stale; conflito project-owned; offline read-only; Doctor e migração. Testes não podem acessar vault pessoal real, modelos, credenciais ou publicar no GitHub.
+
+## Decisões de implementação
+
+Resource Catalog/public-apis é secundário e opcional. Browser é fallback com aprovação quando connector/API/CLI não existir. Quota padrão para novos dispatches: parar com `<=15%` restante em cinco horas ou `<=2%` semanal; hard stop permite apenas cleanup/handoff. Review é independente e reutilizável por fingerprint somente quando head/base, escopo, contrato, testes e política coincidirem.
+
