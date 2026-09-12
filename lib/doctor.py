@@ -31,10 +31,10 @@ UNKNOWN = CheckStatus.UNKNOWN
 
 
 REMEDIATIONS = {
-    "declarations": "run `galaxy init` or `galaxy migrate --project PATH`",
-    "generated": "run `galaxy migrate --untrack-generated`",
-    "legacy": "run `galaxy migrate --project PATH`",
-    "bootstrap": "run `galaxy bootstrap --project PATH --check` and resolve drift",
+    "declarations": "run `galaxy init PATH` or `galaxy migrate PATH --preview`",
+    "generated": "run `galaxy migrate PATH --preview` and review generated-file untracking",
+    "legacy": "run `galaxy migrate PATH --preview`",
+    "bootstrap": "run `galaxy bootstrap PATH --check` and resolve drift",
     "checks": "configure project checks in `.galaxy/checks.json`",
     "telemetry": "enable host runtime telemetry and rerun `galaxy doctor`",
     "quota": "refresh host quota telemetry; do not infer quota from token counts",
@@ -216,13 +216,18 @@ def _check_version(root: Path, project: Any, loaded: Mapping[str, Any], checks: 
     lock = loaded.get("lock-schema")
     version = getattr(lock, "galaxy_version", None)
     if expected is None:
-        # The project lock is authoritative when the caller did not provide an
-        # installation version; this avoids pretending a host's version is known.
-        if version:
-            _record(checks, "version-lock", PASS, f"Galaxy version {version} recorded in galaxy.lock")
-        else:
-            _record(checks, "version-lock", UNKNOWN, "installed Galaxy version cannot be verified", REMEDIATIONS["telemetry"])
-        return version
+        try:
+            expected = (Path(__file__).resolve().parents[1] / "VERSION").read_text(
+                encoding="utf-8"
+            ).strip()
+        except (OSError, UnicodeError):
+            _record(checks, "version-lock", UNKNOWN,
+                    "installed Galaxy version cannot be verified", REMEDIATIONS["telemetry"])
+            return version
+        if not expected:
+            _record(checks, "version-lock", UNKNOWN,
+                    "installed Galaxy VERSION is empty", REMEDIATIONS["telemetry"])
+            return version
     if version == expected:
         _record(checks, "version-lock", PASS, f"Galaxy {expected} matches galaxy.lock")
     else:

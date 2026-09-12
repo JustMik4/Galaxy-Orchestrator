@@ -79,6 +79,16 @@ class DoctorTests(unittest.TestCase):
         report = run_doctor(self.root)
         self.assertEqual(next(c for c in report.checks if c.id == "runtime-verification").status, CheckStatus.UNKNOWN)
         self.assertEqual(next(c for c in report.checks if c.id == "quota-telemetry").status, CheckStatus.UNKNOWN)
+
+    def test_default_version_check_uses_installed_version_not_lock_as_evidence(self):
+        lock_path = self.root / "galaxy.lock"
+        lock = json.loads(lock_path.read_text())
+        lock["galaxy"]["version"] = "999.0.0"
+        lock_path.write_text(json.dumps(lock))
+        report = run_doctor(self.root)
+        check = next(item for item in report.checks if item.id == "version-lock")
+        self.assertEqual(check.status, CheckStatus.FAIL)
+        self.assertIn("999.0.0", check.message)
         self.assertEqual(next(c for c in report.checks if c.id == "lifecycle-candidates").status, CheckStatus.UNKNOWN)
 
     def test_browser_only_action_requires_approval(self):
