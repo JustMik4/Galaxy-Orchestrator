@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -11,7 +12,26 @@ from lib.project import (
 )
 
 
+TRACKED_DECLARATIONS = (
+    "AGENTS.md",
+    ".galaxy/project.yml",
+    ".galaxy/team.yml",
+    ".galaxy/checks.json",
+)
+
+
+def update_declaration_hashes(root: Path) -> None:
+    lock_path = root / "galaxy.lock"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["declarations"] = {
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in TRACKED_DECLARATIONS
+    }
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+
 def write_project(root: Path) -> None:
+    (root / "AGENTS.md").write_text("# Fixture instructions\n", encoding="utf-8")
     (root / ".galaxy").mkdir()
     (root / ".galaxy/project.yml").write_text(json.dumps({
         "schema_version": 1,
@@ -34,6 +54,7 @@ def write_project(root: Path) -> None:
         "project_schema": 1,
         "migration_schema": 1,
     }), encoding="utf-8")
+    update_declaration_hashes(root)
 
 
 class ProjectBoundaryTests(unittest.TestCase):
@@ -62,6 +83,43 @@ class ProjectBoundaryTests(unittest.TestCase):
         path.write_text(json.dumps(lock))
         with self.assertRaises(ProjectConfigurationError):
             load_project(self.root)
+
+    def test_lock_rejects_missing_extra_and_malformed_declaration_hashes(self):
+        path = self.root / "galaxy.lock"
+        original = json.loads(path.read_text(encoding="utf-8"))
+        invalid_declarations = (
+            {
+                key: value for key, value in original["declarations"].items()
+                if key != "AGENTS.md"
+            },
+            {**original["declarations"], "README.md": "0" * 64},
+            {**original["declarations"], "AGENTS.md": "A" * 64},
+            {**original["declarations"], "AGENTS.md": "0" * 63},
+        )
+        for declarations in invalid_declarations:
+            with self.subTest(declarations=declarations):
+                lock = dict(original)
+                lock["declarations"] = declarations
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                with self.assertRaises(ProjectConfigurationError):
+                    load_project(self.root)
+
+    def test_lock_rejects_changed_declaration_bytes(self):
+        (self.root / ".galaxy/checks.json").write_text(
+            json.dumps({"schema_version": 1, "commands": [["python", "-V"]]}),
+            encoding="utf-8",
+        )
+        with self.assertRaises(ProjectConfigurationError):
+            load_project(self.root)
+
+    def test_template_lock_authenticates_exact_canonical_declaration_bytes(self):
+        template = Path(__file__).resolve().parents[2] / "template"
+        lock = json.loads((template / "galaxy.lock").read_text(encoding="utf-8"))
+        self.assertEqual(set(lock["declarations"]), set(TRACKED_DECLARATIONS))
+        self.assertEqual(lock["declarations"], {
+            relative: hashlib.sha256((template / relative).read_bytes()).hexdigest()
+            for relative in TRACKED_DECLARATIONS
+        })
 
     def test_tracked_generated_and_legacy_files_are_reported_only(self):
         if subprocess.run(["git", "--version"], capture_output=True).returncode:

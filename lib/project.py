@@ -6,6 +6,7 @@ keeps the bootstrap dependency-free and makes its serialization unambiguous.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -19,11 +20,21 @@ class ProjectConfigurationError(ValueError):
 
 
 DECLARATION_PATHS = (
+    "AGENTS.md",
     ".galaxy/project.yml",
     ".galaxy/team.yml",
     ".galaxy/checks.json",
     "galaxy.lock",
 )
+
+LOCKED_DECLARATION_PATHS = (
+    "AGENTS.md",
+    ".galaxy/project.yml",
+    ".galaxy/team.yml",
+    ".galaxy/checks.json",
+)
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 LOCAL_IGNORE_PATHS = (
     ".codex/",
@@ -90,6 +101,7 @@ class GalaxyLock:
     adapter_schema: int
     project_schema: int
     migration_schema: int
+    declaration_hashes: Mapping[str, str]
     raw: Mapping[str, Any]
 
 
@@ -251,6 +263,7 @@ def load_lock(path: Path) -> GalaxyLock:
     adapter_schema = adapters.get("schema_version")
     project_schema = raw.get("project_schema")
     migration_schema = raw.get("migration_schema")
+    declarations = raw.get("declarations")
     for label, value in (
         ("adapters.schema_version", adapter_schema),
         ("project_schema", project_schema),
@@ -258,11 +271,23 @@ def load_lock(path: Path) -> GalaxyLock:
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ProjectConfigurationError(f"lock.{label} must be a positive integer")
+    if not isinstance(declarations, dict):
+        raise ProjectConfigurationError("lock.declarations must be an object")
+    if set(declarations) != set(LOCKED_DECLARATION_PATHS):
+        raise ProjectConfigurationError(
+            "lock.declarations must contain exactly: "
+            + ", ".join(LOCKED_DECLARATION_PATHS)
+        )
+    for relative, declaration_digest in declarations.items():
+        if not isinstance(declaration_digest, str) or not _SHA256.fullmatch(declaration_digest):
+            raise ProjectConfigurationError(
+                f"lock.declarations[{relative!r}] must be a lowercase SHA-256 digest"
+            )
     return GalaxyLock(
         schema, version, revision, catalog_revision,
         _strings(specialists.get("packs", []), "lock.specialists.packs"),
         _strings(specialists.get("names", []), "lock.specialists.names"),
-        adapter_schema, project_schema, migration_schema, raw,
+        adapter_schema, project_schema, migration_schema, dict(declarations), raw,
     )
 
 
@@ -279,6 +304,13 @@ def load_project(root: Path | str) -> GalaxyProject:
     team = load_team(paths[".galaxy/team.yml"])
     checks = load_checks(paths[".galaxy/checks.json"])
     lock = load_lock(paths["galaxy.lock"])
+    declaration_bytes = dict(snapshot)
+    for relative, expected_digest in lock.declaration_hashes.items():
+        actual_digest = hashlib.sha256(declaration_bytes[relative]).hexdigest()
+        if actual_digest != expected_digest:
+            raise ProjectConfigurationError(
+                f"project declaration does not match galaxy.lock: {relative}"
+            )
     if config.schema_version != lock.project_schema:
         raise ProjectConfigurationError("project schema does not match galaxy.lock")
     if config.specialist_packs != lock.specialist_packs or config.specialist_names != lock.specialist_names:
@@ -325,6 +357,7 @@ def project_pollution(root: Path | str) -> PollutionReport:
 
 __all__ = [
     "ChecksConfig", "DECLARATION_PATHS", "GalaxyLock", "GalaxyProject",
+    "LOCKED_DECLARATION_PATHS",
     "LOCAL_IGNORE_PATHS", "PollutionReport", "ProjectConfig",
     "ProjectConfigurationError", "TeamConfig", "declarations_unchanged",
     "load_checks", "load_lock", "load_project", "load_project_config",

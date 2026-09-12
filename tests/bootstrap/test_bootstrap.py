@@ -7,7 +7,7 @@ from pathlib import Path
 
 from lib.bootstrap import BootstrapError, bootstrap, bootstrap_plan
 
-from tests.bootstrap.test_project import write_project
+from tests.bootstrap.test_project import update_declaration_hashes, write_project
 
 
 class FakeRenderer:
@@ -76,6 +76,7 @@ class BootstrapTests(unittest.TestCase):
         config = json.loads(config_path.read_text())
         config["vault"] = {"enabled": False, "path": ".galaxy/vault", "mode": "projection"}
         config_path.write_text(json.dumps(config))
+        update_declaration_hashes(self.root)
         result = bootstrap(self.root, catalog_root=self.catalog, renderer=FakeRenderer(), verify_catalog=False)
         self.assertEqual(result.vault, "disabled")
         self.assertFalse((self.root / ".galaxy/vault").exists())
@@ -84,6 +85,7 @@ class BootstrapTests(unittest.TestCase):
         template = Path(__file__).parents[2] / "template"
         target = Path(self.temporary.name) / "from-template"
         shutil.copytree(template / ".galaxy", target / ".galaxy")
+        shutil.copy2(template / "AGENTS.md", target / "AGENTS.md")
         shutil.copy2(template / "galaxy.lock", target / "galaxy.lock")
         result = bootstrap(target, catalog_root=self.catalog)
         self.assertTrue(result.applied)
@@ -111,6 +113,7 @@ class BootstrapTests(unittest.TestCase):
         template = Path(__file__).parents[2] / "template"
         target = Path(self.temporary.name) / "hot-set-change"
         shutil.copytree(template / ".galaxy", target / ".galaxy")
+        shutil.copy2(template / "AGENTS.md", target / "AGENTS.md")
         shutil.copy2(template / "galaxy.lock", target / "galaxy.lock")
         bootstrap(target, catalog_root=self.catalog)
         config_path = target / ".galaxy/project.yml"
@@ -121,6 +124,7 @@ class BootstrapTests(unittest.TestCase):
         lock = json.loads(lock_path.read_text())
         lock["specialists"]["packs"] = ["git"]
         lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        update_declaration_hashes(target)
         result = bootstrap(target, catalog_root=self.catalog)
         self.assertIn(".codex/skills/core/SKILL.md", result.removed)
         self.assertFalse((target / ".codex/skills/core").exists())

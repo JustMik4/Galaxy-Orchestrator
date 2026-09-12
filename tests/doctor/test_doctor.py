@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -13,6 +14,7 @@ class DoctorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        (self.root / "AGENTS.md").write_text("# Fixture instructions\n")
         (self.root / ".galaxy").mkdir()
         (self.root / ".galaxy" / "project.yml").write_text(json.dumps({
             "schema_version": 1, "name": "fixture", "adapter": "codex",
@@ -32,12 +34,25 @@ class DoctorTests(unittest.TestCase):
             "adapters": {"schema_version": 1}, "project_schema": 1,
             "migration_schema": 1,
         }))
+        self._refresh_declaration_hashes()
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def _git(self, *args):
         return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True)
+
+    def _refresh_declaration_hashes(self):
+        lock_path = self.root / "galaxy.lock"
+        lock = json.loads(lock_path.read_text())
+        lock["declarations"] = {
+            relative: hashlib.sha256((self.root / relative).read_bytes()).hexdigest()
+            for relative in (
+                "AGENTS.md", ".galaxy/project.yml", ".galaxy/team.yml",
+                ".galaxy/checks.json",
+            )
+        }
+        lock_path.write_text(json.dumps(lock))
 
     def test_clean_project_has_no_failures(self):
         (self.root / ".gitignore").write_text(".env\n.codex/\n")
@@ -117,6 +132,7 @@ class DoctorTests(unittest.TestCase):
             },
         }
         (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+        self._refresh_declaration_hashes()
 
         report = run_doctor(self.root)
         check = next(c for c in report.checks if c.id == "coop-coordination")
@@ -140,6 +156,7 @@ class DoctorTests(unittest.TestCase):
             },
         }
         (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+        self._refresh_declaration_hashes()
         workflow = self.root / ".github/workflows/galaxy-control.yml"
         workflow.parent.mkdir(parents=True)
         source = Path(__file__).resolve().parents[2] / "template/.github/workflows/galaxy-control.yml"
@@ -164,6 +181,7 @@ class DoctorTests(unittest.TestCase):
             },
         }
         (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+        self._refresh_declaration_hashes()
 
         report = run_doctor(self.root)
         check = next(c for c in report.checks if c.id == "coop-coordination")

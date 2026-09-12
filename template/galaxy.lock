@@ -3,6 +3,12 @@
     "codex": "codex-v1",
     "schema_version": 1
   },
+  "declarations": {
+    "AGENTS.md": "756bbb7261bb8c257525679902d8ecb2c2b4e87b70fee30be57bb9fc83822aa4",
+    ".galaxy/project.yml": "f3b920b252129f46e450dd33efea9c59f719c0612a92c3e333cc4e9e71b936e5",
+    ".galaxy/team.yml": "bb5aca2be72c310f064223183e9e4ea82074bb17236da90fb11db2082a0722b0",
+    ".galaxy/checks.json": "52edacd052b0610193043dcbe6746d595f06f246a2925424cda1a9bcafc502a4"
+  },
   "galaxy": {
     "source_revision": "v2.0.0",
     "version": "2.0.0"

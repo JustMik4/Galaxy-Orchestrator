@@ -36,12 +36,14 @@ FROM_VERSION = "1.3.0"
 TO_VERSION = "2.0.0"
 
 TEAM = "AGENT_TEAM.yml"
+AGENTS = "AGENTS.md"
 CHECKS = ".multicontroller/checks.json"
 POLICY = ".multicontroller/policy.json"
 MANIFEST = ".multicontroller/install-manifest.json"
 OLD_WORKFLOW = ".github/workflows/multicontroller.yml"
+CONTROL_WORKFLOW = ".github/workflows/galaxy-control.yml"
 
-PROJECT_OWNED = {TEAM, CHECKS}
+PROJECT_OWNED = {AGENTS, TEAM, CHECKS}
 GENERATED_PREFIXES = (
     ".codex/",
     ".agents/skills/multicontroller/",
@@ -108,6 +110,22 @@ def _team_bytes(team: Mapping[str, Any]) -> bytes:
     if isinstance(migration, dict):
         migration.setdefault("source", "AGENT_TEAM.yml")
         migration.setdefault("source_schema_version", team.get("schema_version"))
+    if migrated.get("mode") == "CO-OP":
+        old_coordination = migrated.get("coordination")
+        issue = (
+            old_coordination.get("control_issue")
+            if isinstance(old_coordination, Mapping) else None
+        )
+        if isinstance(issue, bool) or not isinstance(issue, int) or issue < 1:
+            issue = None
+        migrated["coordination"] = {
+            "automatic_expiry": False,
+            "backend": "github-actions-issue",
+            "capability": "github-actions",
+            "claim_protocol": "serialized-workflow",
+            "control_issue": issue,
+            "workflow": CONTROL_WORKFLOW,
+        }
     return json_bytes(migrated)
 
 
@@ -158,6 +176,16 @@ def _workflow_bytes(master: Path) -> bytes:
         if source.is_file():
             return source.read_bytes()
     raise MigrationDetectionError("missing canonical Galaxy validation workflow template")
+
+
+def _control_workflow_bytes(master: Path) -> bytes:
+    """Return the canonical serialized CO-OP coordinator workflow bytes."""
+    repository = Path(__file__).resolve().parents[2]
+    for root in (master, repository):
+        source = root / "template" / CONTROL_WORKFLOW
+        if source.is_file():
+            return source.read_bytes()
+    raise MigrationDetectionError("missing canonical Galaxy control workflow template")
 
 
 def _ignore_bytes(project: Path) -> bytes:
@@ -333,6 +361,7 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     checks_data = _checks_bytes(checks)
     project_data = _project_bytes(project, policy)
     declarations = {
+        "AGENTS.md": checked_project_path(project, AGENTS).read_bytes(),
         ".galaxy/team.yml": team_data,
         ".galaxy/checks.json": checks_data,
         ".galaxy/project.yml": project_data,
@@ -346,6 +375,13 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
         {"source": POLICY, "destination": ".galaxy/project.yml", "rule": "policy-to-project"},
         {"source": MANIFEST, "destination": "galaxy.lock", "rule": "manifest-to-lock"},
     ]
+    if team.get("mode") == "CO-OP":
+        writes[CONTROL_WORKFLOW] = _control_workflow_bytes(master)
+        transformations.append({
+            "source": TEAM,
+            "destination": CONTROL_WORKFLOW,
+            "rule": "coop-control-workflow-v2",
+        })
     deletes = [TEAM, CHECKS, POLICY]
     deletes.extend(
         name for name in unchanged if name.startswith(".codex/")

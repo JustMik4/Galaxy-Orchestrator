@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from lib import galaxy as galaxy_cli
 from lib import installer
+from lib.project import load_project
+from tests.bootstrap.test_project import update_declaration_hashes
 from tests.migrations.test_v1_3_to_v2_0 import MigrationFixture
 
 
@@ -94,6 +96,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         config = (self.project / ".codex/config.toml").read_text(encoding="utf-8")
         self.assertIn('model = "gpt-5.6-sol"', config)
         self.assertIn('model_reasoning_effort = "medium"', config)
+        self.assertEqual(load_project(self.project).team.mode, "SOLO")
 
     def test_init_alias_installs_default_solo_project(self):
         result = self.run_cli("init", self.project)
@@ -137,6 +140,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertNotIn("'lib/coordinator.py'", workflow)
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("${{ inputs.request }}", workflow)
+        self.assertEqual(load_project(self.project).team.mode, "CO-OP")
         for relative in (
             ".multicontroller", "AGENT_TEAM.yml",
             ".github/workflows/multicontroller.yml",
@@ -227,6 +231,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         lock["specialists"]["packs"] = []
         project_path.write_text(json.dumps(project), encoding="utf-8")
         lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        update_declaration_hashes(self.project)
         stale = self.project / ".codex/skills/core/SKILL.md"
 
         result = self.run_cli("specialists", "sync", self.project, "--check")
@@ -243,6 +248,7 @@ class GalaxyV2CliTests(unittest.TestCase):
             "schema_version": 1,
             "commands": [[sys.executable, "-c", "pass"]],
         }), encoding="utf-8")
+        update_declaration_hashes(self.project)
 
         result = self.run_cli("validate", self.project, "--gate")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -259,6 +265,7 @@ class GalaxyV2CliTests(unittest.TestCase):
             "schema_version": 1,
             "commands": [[sys.executable, "-c", "pass"]],
         }), encoding="utf-8")
+        update_declaration_hashes(self.project)
 
         result = self.run_cli("doctor", self.project, "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -344,6 +351,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config["vault"].update(enabled=True, path=".galaxy/obsidian")
         config_path.write_text(json.dumps(config), encoding="utf-8")
+        update_declaration_hashes(self.project)
         snapshots = Path(self.temporary.name) / "snapshots.json"
         snapshots.write_text(json.dumps([{
             "task_id": "T-9",

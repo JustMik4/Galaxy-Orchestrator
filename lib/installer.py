@@ -130,6 +130,13 @@ V2_TRACKED_FILES = (
     '.github/workflows/galaxy-validate.yml',
 )
 
+V2_LOCKED_DECLARATIONS = (
+    'AGENTS.md',
+    '.galaxy/project.yml',
+    '.galaxy/team.yml',
+    '.galaxy/checks.json',
+)
+
 V2_COOP_FILES = (
     '.github/workflows/galaxy-control.yml',
 )
@@ -223,6 +230,13 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
         project_config = json.loads(project_path.read_text(encoding='utf-8'))
         project_config['routing'] = {'profile': preset}
         project_path.write_bytes(encoded(project_config))
+        lock_path = stage / 'galaxy.lock'
+        lock = json.loads(lock_path.read_text(encoding='utf-8'))
+        lock['declarations'] = {
+            name: digest((stage / name).read_bytes())
+            for name in V2_LOCKED_DECLARATIONS
+        }
+        lock_path.write_bytes(encoded(lock))
         if (project / '.git').is_dir():
             exclude = project / '.git/info/exclude'
             staged_exclude = stage / '.git/info/exclude'

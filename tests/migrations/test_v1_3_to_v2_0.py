@@ -15,6 +15,8 @@ from lib.migrations import (
     rollback,
 )
 from lib.migrations import v1_3_to_v2_0 as migration_module
+from lib.doctor import CheckStatus, run_doctor
+from lib.project import load_project
 
 
 def _json(value):
@@ -34,6 +36,7 @@ class MigrationFixture:
     def __init__(self, root: Path):
         self.root = root
         self.files = {
+            "AGENTS.md": b"# Project-owned V1 instructions\r\nDo not rewrite me.\r\n",
             "AGENT_TEAM.yml": _json({
                 "schema_version": 3,
                 "mode": "SOLO",
@@ -127,6 +130,94 @@ class MigrationTests(unittest.TestCase):
             [["python", "-m", "unittest"]],
         )
         self.assertEqual(receipt["status"], "success")
+
+    def test_migration_preserves_agents_bytes_and_authenticates_all_declarations(self):
+        before = (self.project / "AGENTS.md").read_bytes()
+        receipt = apply(self.master, self.project)
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual((self.project / "AGENTS.md").read_bytes(), before)
+        lock = json.loads((self.project / "galaxy.lock").read_text(encoding="utf-8"))
+        expected_paths = {
+            "AGENTS.md", ".galaxy/project.yml", ".galaxy/team.yml",
+            ".galaxy/checks.json",
+        }
+        self.assertEqual(set(lock["declarations"]), expected_paths)
+        self.assertEqual(lock["declarations"], {
+            relative: hashlib.sha256((self.project / relative).read_bytes()).hexdigest()
+            for relative in expected_paths
+        })
+        self.assertEqual(load_project(self.project).team.mode, "SOLO")
+
+    def test_coop_migration_normalizes_coordination_and_materializes_canonical_workflow(self):
+        team_path = self.project / "AGENT_TEAM.yml"
+        team = json.loads(team_path.read_text(encoding="utf-8"))
+        team.update({
+            "mode": "CO-OP",
+            "operators": [{"id": "primary", "github_login": "alice"}],
+            "integration_operators": ["primary"],
+            "integration_branch": "develop",
+            "rules": {"cross_review": "optional", "direct_main_push": False},
+            "review": {"independent_agent_required": True, "partner_review": "optional"},
+            "coordination": {
+                "backend": "github-issue",
+                "claim_protocol": "legacy",
+                "control_issue": 17,
+            },
+        })
+        team_path.write_bytes(_json(team))
+
+        receipt = apply(self.master, self.project)
+
+        self.assertEqual(receipt["status"], "success")
+        migrated = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
+        self.assertEqual(migrated["operators"], team["operators"])
+        self.assertEqual(migrated["integration_operators"], ["primary"])
+        self.assertEqual(migrated["integration_branch"], "develop")
+        self.assertEqual(migrated["rules"], team["rules"])
+        self.assertEqual(migrated["review"], team["review"])
+        self.assertEqual(migrated["coordination"], {
+            "automatic_expiry": False,
+            "backend": "github-actions-issue",
+            "capability": "github-actions",
+            "claim_protocol": "serialized-workflow",
+            "control_issue": 17,
+            "workflow": ".github/workflows/galaxy-control.yml",
+        })
+        self.assertEqual(
+            (self.project / ".github/workflows/galaxy-control.yml").read_bytes(),
+            (ROOT / "template/.github/workflows/galaxy-control.yml").read_bytes(),
+        )
+        self.assertEqual(load_project(self.project).team.mode, "CO-OP")
+
+    def test_incomplete_coop_migration_stays_truthful_and_doctor_blocks(self):
+        team_path = self.project / "AGENT_TEAM.yml"
+        team = json.loads(team_path.read_text(encoding="utf-8"))
+        team.update({
+            "mode": "CO-OP",
+            "operators": [],
+            "integration_operators": [],
+            "coordination": {"control_issue": 0},
+        })
+        team_path.write_bytes(_json(team))
+
+        apply(self.master, self.project, doctor=lambda _root: {"status": "passed"})
+
+        migrated = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
+        self.assertEqual(migrated["operators"], [])
+        self.assertEqual(migrated["integration_operators"], [])
+        self.assertIsNone(migrated["coordination"]["control_issue"])
+        report = run_doctor(self.project, galaxy_version="2.0.0")
+        coop = next(item for item in report.checks if item.id == "coop-coordination")
+        self.assertEqual(coop.status, CheckStatus.FAIL)
+        self.assertIn("control_issue", coop.details["missing"])
+        self.assertIn("operators", coop.details["missing"])
+        self.assertIn("integration_operators", coop.details["missing"])
+
+    def test_solo_migration_does_not_create_control_workflow(self):
+        apply(self.master, self.project)
+        self.assertFalse(
+            (self.project / ".github/workflows/galaxy-control.yml").exists()
+        )
 
     def test_production_defaults_use_complete_project_and_doctor_boundaries(self):
         checks = self.project / ".multicontroller/checks.json"
