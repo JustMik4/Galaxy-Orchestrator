@@ -95,6 +95,71 @@ class DoctorTests(unittest.TestCase):
         report = run_doctor(self.root)
         self.assertEqual(next(c for c in report.checks if c.id == "codex-config").status, CheckStatus.PASS)
 
+    def test_incomplete_coop_coordination_is_a_failure(self):
+        team = {
+            "schema_version": 1, "mode": "CO-OP", "operators": [],
+            "integration_branch": "main", "integration_operators": [],
+            "required_checks": ["galaxy / validate"],
+            "coordination": {
+                "backend": "github-actions-issue",
+                "claim_protocol": "serialized-workflow",
+                "control_issue": None,
+            },
+        }
+        (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+
+        report = run_doctor(self.root)
+        check = next(c for c in report.checks if c.id == "coop-coordination")
+        self.assertEqual(check.status, CheckStatus.FAIL)
+        self.assertEqual(report.exit_code, 1)
+        self.assertIn("control_issue", check.details["missing"])
+        self.assertIn("workflow", check.details["missing"])
+        self.assertIn("capability", check.details["missing"])
+
+    def test_complete_coop_coordination_requires_coherent_workflow_capability(self):
+        team = {
+            "schema_version": 1, "mode": "CO-OP",
+            "operators": [{"id": "one", "github_login": "alice"}],
+            "integration_operators": ["one"], "integration_branch": "main",
+            "required_checks": ["galaxy / validate"],
+            "coordination": {
+                "backend": "github-actions-issue",
+                "claim_protocol": "serialized-workflow", "control_issue": 17,
+                "capability": "github-actions",
+                "workflow": ".github/workflows/galaxy-control.yml",
+            },
+        }
+        (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+        workflow = self.root / ".github/workflows/galaxy-control.yml"
+        workflow.parent.mkdir(parents=True)
+        source = Path(__file__).resolve().parents[2] / "template/.github/workflows/galaxy-control.yml"
+        workflow.write_bytes(source.read_bytes())
+
+        report = run_doctor(self.root)
+        check = next(c for c in report.checks if c.id == "coop-coordination")
+        self.assertEqual(check.status, CheckStatus.PASS, check.message)
+        self.assertEqual(check.details["workflow"], ".github/workflows/galaxy-control.yml")
+
+    def test_malformed_coop_operator_fails_closed_without_crashing_doctor(self):
+        team = {
+            "schema_version": 1, "mode": "CO-OP",
+            "operators": [{"id": "one", "github_login": {"bad": "shape"}}],
+            "integration_operators": ["one"], "integration_branch": "main",
+            "required_checks": ["galaxy / validate"],
+            "coordination": {
+                "backend": "github-actions-issue",
+                "claim_protocol": "serialized-workflow", "control_issue": 17,
+                "capability": "github-actions",
+                "workflow": ".github/workflows/galaxy-control.yml",
+            },
+        }
+        (self.root / ".galaxy/team.yml").write_text(json.dumps(team))
+
+        report = run_doctor(self.root)
+        check = next(c for c in report.checks if c.id == "coop-coordination")
+        self.assertEqual(check.status, CheckStatus.FAIL)
+        self.assertIn("operators", check.details["missing"])
+
 
 if __name__ == "__main__":
     unittest.main()

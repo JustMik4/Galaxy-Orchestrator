@@ -113,10 +113,30 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertEqual(team["coordination"], {
             "automatic_expiry": False,
             "backend": "github-actions-issue",
+            "capability": "github-actions",
             "claim_protocol": "serialized-workflow",
             "control_issue": None,
+            "workflow": ".github/workflows/galaxy-control.yml",
         })
         self.assertEqual(team["required_checks"], ["galaxy / validate"])
+        control = self.project / ".github/workflows/galaxy-control.yml"
+        self.assertTrue(control.is_file())
+        workflow = control.read_text(encoding="utf-8")
+        for required in (
+            "workflow_dispatch:", "group: galaxy-control-v2",
+            "issues: write", "pull-requests: write", "contents: write",
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            "github.event.repository.default_branch", "persist-credentials: false",
+            "GH_TOKEN: ${{ github.token }}", "galaxy.lock", "source_revision",
+            "https://github.com/JustMik4/Galaxy-Orchestrator",
+            "^[0-9a-fA-F]{40}$", "FETCH_HEAD", "rev-parse",
+            "-m lib.coordinator",
+        ):
+            self.assertIn(required, workflow)
+        self.assertNotIn(".multicontroller/tools/coordinator.py", workflow)
+        self.assertNotIn("'lib/coordinator.py'", workflow)
+        self.assertNotIn("secrets.", workflow)
+        self.assertNotIn("${{ inputs.request }}", workflow)
         for relative in (
             ".multicontroller", "AGENT_TEAM.yml",
             ".github/workflows/multicontroller.yml",
@@ -129,6 +149,11 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("incompatible", mismatch.stderr)
         self.assertEqual(team_path.read_bytes(), before)
+
+    def test_solo_install_does_not_include_remote_control_workflow(self):
+        result = self.run_cli("install", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.project / ".github/workflows/galaxy-control.yml").exists())
 
     def test_critical_preset_is_declarative_and_keeps_root_sol_medium(self):
         result = self.run_cli("install", self.project, "--preset", "critical")

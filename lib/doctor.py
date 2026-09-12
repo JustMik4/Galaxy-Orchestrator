@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path, PurePosixPath
+import stat
 import subprocess
 from typing import Any, Iterable, Mapping
 
@@ -395,7 +396,24 @@ def _check_action(resolver: Any, capabilities: Any, approval: bool, checks: list
         _record(checks, "action-capability", FAIL, "no usable capability for github.repository.create", REMEDIATIONS["action"])
 
 
-def _check_coop(project: Any, checks: list[CheckRecord]) -> None:
+def _read_coop_workflow(root: Path, relative: str) -> str:
+    pure = PurePosixPath(relative.replace("\\", "/"))
+    if pure.is_absolute() or ".." in pure.parts:
+        raise ValueError("coordination workflow must be project-relative")
+    current = root
+    for part in pure.parts:
+        current /= part
+        if current.exists() or current.is_symlink():
+            info = current.lstat()
+            if current.is_symlink() or bool(
+                getattr(info, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            ):
+                raise ValueError("coordination workflow path contains a link/reparse point")
+    return current.read_text(encoding="utf-8")
+
+
+def _check_coop(root: Path, project: Any, checks: list[CheckRecord]) -> None:
     if project is None:
         return
     if project.team.mode == "SOLO":
@@ -403,11 +421,84 @@ def _check_coop(project: Any, checks: list[CheckRecord]) -> None:
         return
     raw = project.team.raw
     coordination = raw.get("coordination") or raw.get("coordinator")
-    valid = isinstance(coordination, Mapping) and bool(coordination.get("backend")) and bool(raw.get("integration_branch"))
-    if valid:
-        _record(checks, "coop-coordination", PASS, "CO-OP serialized coordination is configured")
+    missing = []
+    if not isinstance(coordination, Mapping):
+        coordination = {}
+        missing.append("coordination")
+    if coordination.get("backend") != "github-actions-issue":
+        missing.append("backend")
+    if coordination.get("claim_protocol") != "serialized-workflow":
+        missing.append("claim_protocol")
+    issue = coordination.get("control_issue")
+    if isinstance(issue, bool) or not isinstance(issue, int) or issue < 1:
+        missing.append("control_issue")
+    if coordination.get("capability") != "github-actions":
+        missing.append("capability")
+    workflow_relative = coordination.get("workflow")
+    if workflow_relative != ".github/workflows/galaxy-control.yml":
+        missing.append("workflow")
+    branch = raw.get("integration_branch")
+    if not isinstance(branch, str) or not branch.strip():
+        missing.append("integration_branch")
+    required_checks = raw.get("required_checks")
+    if not isinstance(required_checks, list) or not required_checks or any(
+        not isinstance(item, str) or not item.strip() for item in required_checks
+    ) or "galaxy / validate" not in required_checks:
+        missing.append("required_checks")
+    operators = raw.get("operators")
+    operator_ids = []
+    logins = []
+    if isinstance(operators, list):
+        for item in operators:
+            if isinstance(item, Mapping):
+                operator_ids.append(item.get("id"))
+                login = item.get("github_login")
+                logins.append(login.casefold() if isinstance(login, str) else login)
+    if (
+        not operator_ids or len(operator_ids) != len(operators)
+        or any(not isinstance(item, str) or not item for item in operator_ids + logins)
+        or len(set(operator_ids)) != len(operator_ids) or len(set(logins)) != len(logins)
+    ):
+        missing.append("operators")
+    integrators = raw.get("integration_operators")
+    if (
+        not isinstance(integrators, list) or not integrators
+        or any(item not in operator_ids for item in integrators)
+        or len(set(integrators)) != len(integrators)
+    ):
+        missing.append("integration_operators")
+    if workflow_relative == ".github/workflows/galaxy-control.yml":
+        try:
+            workflow = _read_coop_workflow(root, workflow_relative)
+            required_workflow = (
+                "workflow_dispatch:", "group: galaxy-control-v2",
+                "contents: write", "issues: write", "pull-requests: write",
+                "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+                "github.event.repository.default_branch", "persist-credentials: false",
+                "GH_TOKEN: ${{ github.token }}", "galaxy.lock", "source_revision",
+                "https://github.com/JustMik4/Galaxy-Orchestrator",
+                "^[0-9a-fA-F]{40}$", "FETCH_HEAD", "rev-parse",
+                "-m lib.coordinator",
+            )
+            if any(marker not in workflow for marker in required_workflow):
+                missing.append("workflow-capability")
+        except (OSError, UnicodeError, ValueError):
+            missing.append("workflow")
+    details = {
+        "backend": coordination.get("backend"),
+        "capability": coordination.get("capability"),
+        "control_issue": issue,
+        "workflow": workflow_relative,
+        "missing": sorted(set(missing)),
+    }
+    if missing:
+        _record(checks, "coop-coordination", FAIL,
+                "CO-OP serialized coordination is incomplete or incoherent",
+                REMEDIATIONS["coop"], details)
     else:
-        _record(checks, "coop-coordination", FAIL, "CO-OP coordination configuration is incomplete", REMEDIATIONS["coop"])
+        _record(checks, "coop-coordination", PASS,
+                "CO-OP serialized coordination workflow and capability are configured",
+                details=details)
 
 
 def _check_vault(project: Any, root: Path, snapshots: Iterable[Mapping[str, Any]], checks: list[CheckRecord]) -> None:
@@ -502,7 +593,7 @@ def run_doctor(project_root: str | Path, *, galaxy_version: str | None = None,
     _check_runtime(runtime, runtime_verifier, checks)
     _check_quota(quota, quota_snapshot, quota_guard, checks)
     _check_action(action_resolver, capabilities, action_approval, checks)
-    _check_coop(project, checks)
+    _check_coop(root, project, checks)
     _check_vault(project, root, snapshots, checks)
     _check_lifecycle(root, lifecycle_metadata, now, checks)
     return DoctorReport(str(root), tuple(checks), version)

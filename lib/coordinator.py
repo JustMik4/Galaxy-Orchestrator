@@ -6,7 +6,25 @@ import os
 from pathlib import Path
 import re
 import urllib.request
-from multicontroller import grant, normalized_path, overlap, gate
+try:
+    from .legacy import grant, normalized_path, overlap, gate
+except ImportError:  # V1 compatibility when imported with ``lib`` on sys.path.
+    from multicontroller import grant, normalized_path, overlap, gate
+
+
+def load_team(root=Path('.')):
+    """Load the canonical V2 team declaration, with an explicit V1 fallback."""
+    root = Path(root)
+    canonical = root / '.galaxy/team.yml'
+    legacy = root / 'AGENT_TEAM.yml'
+    path = canonical if canonical.is_file() else legacy
+    try:
+        team = json.loads(path.read_text(encoding='utf-8-sig'))
+    except FileNotFoundError as exc:
+        raise ValueError('Missing .galaxy/team.yml (or V1 AGENT_TEAM.yml)') from exc
+    if not isinstance(team, dict):
+        raise ValueError('Team declaration must be an object')
+    return team
 
 
 def operator(team,login):
@@ -159,7 +177,7 @@ class GitHub:
 
 def main():
     event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-    team=json.loads(Path('AGENT_TEAM.yml').read_text())
+    team=load_team(Path(os.environ.get('GITHUB_WORKSPACE', '.')))
     default=event['repository']['default_branch']
     if os.environ.get('GITHUB_REF')!='refs/heads/'+default: raise ValueError('Run workflow only from default branch')
     if team.get('mode')!='CO-OP': raise ValueError('Coordinator is for CO-OP projects')

@@ -130,6 +130,10 @@ V2_TRACKED_FILES = (
     '.github/workflows/galaxy-validate.yml',
 )
 
+V2_COOP_FILES = (
+    '.github/workflows/galaxy-control.yml',
+)
+
 V1_TEMPLATE_FILES = (
     'AGENT_TEAM.yml',
     'AGENTS.md',
@@ -193,7 +197,8 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
     with tempfile.TemporaryDirectory(prefix='galaxy-install-') as temporary:
         stage = Path(temporary)
         exclude_original = None
-        for name in V2_TRACKED_FILES:
+        tracked_files = V2_TRACKED_FILES + (V2_COOP_FILES if mode == 'CO-OP' else ())
+        for name in tracked_files:
             source = safe_path(master / 'template' / name)
             if not source.is_file():
                 raise ValueError('Missing canonical template file: ' + name)
@@ -207,8 +212,10 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
             team['coordination'] = {
                 'automatic_expiry': False,
                 'backend': 'github-actions-issue',
+                'capability': 'github-actions',
                 'claim_protocol': 'serialized-workflow',
                 'control_issue': None,
+                'workflow': '.github/workflows/galaxy-control.yml',
             }
             team['required_checks'] = ['galaxy / validate']
         team_path.write_bytes(encoded(team))
