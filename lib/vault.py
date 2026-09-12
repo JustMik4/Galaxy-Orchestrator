@@ -49,6 +49,23 @@ def validate_internal_vault_path(project, configured):
     return target
 
 
+def _validate_external_vault_boundary(project, target):
+    """Require an external vault to be disjoint from the project tree."""
+    root = Path(os.path.abspath(project))
+    try:
+        target.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise VaultError('external vault path must be disjoint from project')
+    try:
+        root.relative_to(target)
+    except ValueError:
+        pass
+    else:
+        raise VaultError('external vault path must be disjoint from project')
+
+
 def _operator_vault_override(project):
     """Read only the explicit operator-local external-vault override."""
     path = Path(os.path.abspath(project)) / '.galaxy' / 'local' / 'operator.toml'
@@ -80,6 +97,7 @@ def _config(project, config):
     if config.get('external', False) or Path(path).is_absolute():
         target = Path(os.path.abspath(Path(path).expanduser()))
         _reject_links(target)
+        _validate_external_vault_boundary(project, target)
     else:
         target = validate_internal_vault_path(project, path)
     mode = config.get('mode', 'projection')

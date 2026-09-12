@@ -36,12 +36,12 @@ REMEDIATIONS = {
     "legacy": "run `galaxy migrate PATH --preview`",
     "bootstrap": "run `galaxy bootstrap PATH --check` and resolve drift",
     "checks": "configure project checks in `.galaxy/checks.json`",
-    "telemetry": "enable host runtime telemetry and rerun `galaxy doctor`",
+    "telemetry": "enable host runtime telemetry and rerun `galaxy doctor PATH`",
     "quota": "refresh host quota telemetry; do not infer quota from token counts",
     "action": "approve browser fallback explicitly or configure connector/plugin/API/CLI",
     "coop": "configure `.galaxy/team.yml` coordination for serialized CO-OP state",
-    "vault": "run `galaxy vault sync --check` and resolve drift before `--force`",
-    "lifecycle": "review candidates with `galaxy cleanup --preview`; apply only after validation",
+    "vault": "run `galaxy vault sync PATH --check` and resolve drift before `--force`",
+    "lifecycle": "review candidates with `galaxy cleanup PATH --preview`; apply only after validation",
     "env": "review and consolidate `.env.example`/`env.example`; do not auto-delete",
 }
 

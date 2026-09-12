@@ -36,6 +36,12 @@ _BODY_AUTHORITY = re.compile(
     r"delegation|integration(?:\s+authority)?|quota(?:\s+thresholds?)?|"
     r"browser(?:\s+approval)?|ownership|filesystem\s+permissions?|branch\s+protection)"
     r"(?:\s*[:=]\s*|\s+(?:to|is|must|should|may|can|without)\b)"
+    r"|\b(?:choose|select|pick|switch\s+to)\s+(?:the\s+)?(?:[a-z0-9_-]+\s+){0,3}models?\b"
+    r"|\b(?:lower|raise|increase|reduce|decrease)\s+(?:the\s+)?(?:reasoning\s+)?effort\b"
+    r"|\b(?:work|run|operate)\s+(?:inside|in|within)\s+(?:an?\s+)?(?:[a-z0-9_-]+\s+){0,2}sandbox\b"
+    r"|\bnetwork[-\s]+enabled\s+sandbox\b"
+    r"|\bdelegat(?:e|es|ed|ing)\s+(?:freely|tasks?|work|to\s+(?:agents?|workers?|subagents?)|"
+    r"without\s+(?:approval|restriction|limits?))\b"
 )
 
 

@@ -119,6 +119,37 @@ class VaultTests(unittest.TestCase):
         self.assertEqual(Path(result['path']), external)
         self.assertTrue((external / 'tasks/T-1.md').is_file())
 
+    def _write_external_override(self, target):
+        local = self.project / '.galaxy/local'
+        local.mkdir(parents=True, exist_ok=True)
+        (local / 'operator.toml').write_text(
+            '[vault]\nexternal = true\npath = ' + json.dumps(str(target)) + '\n',
+            encoding='utf-8',
+        )
+
+    def _assert_external_boundary_rejected(self, target):
+        self._write_external_override(target)
+        config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'projection'}
+        for operation in (
+            lambda: status(self.project, config, [self.snapshot]),
+            lambda: sync(self.project, config, [self.snapshot], force=True),
+        ):
+            with self.subTest(operation=operation.__code__.co_firstlineno):
+                with self.assertRaisesRegex(
+                    VaultError, 'external vault path must be disjoint from project'
+                ):
+                    operation()
+        self.assertFalse((target / '.obsidian/app.json').exists())
+
+    def test_external_override_cannot_equal_project(self):
+        self._assert_external_boundary_rejected(self.project)
+
+    def test_external_override_cannot_be_parent_of_project(self):
+        self._assert_external_boundary_rejected(self.project.parent)
+
+    def test_external_override_cannot_be_child_of_project(self):
+        self._assert_external_boundary_rejected(self.project / 'personal-vault')
+
 
 if __name__ == '__main__':
     unittest.main()

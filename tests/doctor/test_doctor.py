@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from lib.actions import Capability
-from lib.doctor import CheckStatus, run_doctor
+from lib.doctor import CheckStatus, REMEDIATIONS, run_doctor
 from lib.quota import QuotaSnapshot
 
 
@@ -64,6 +64,20 @@ class DoctorTests(unittest.TestCase):
         )
         self.assertEqual(report.exit_code, 0)
         self.assertFalse(report.failed)
+
+    def test_remediation_commands_include_required_project_path(self):
+        self.assertEqual(
+            REMEDIATIONS["telemetry"],
+            "enable host runtime telemetry and rerun `galaxy doctor PATH`",
+        )
+        self.assertEqual(
+            REMEDIATIONS["vault"],
+            "run `galaxy vault sync PATH --check` and resolve drift before `--force`",
+        )
+        self.assertEqual(
+            REMEDIATIONS["lifecycle"],
+            "review candidates with `galaxy cleanup PATH --preview`; apply only after validation",
+        )
 
     def test_tracked_generated_is_fail_by_default_and_warn_policy_is_supported(self):
         generated = self.root / ".codex" / "config.toml"
