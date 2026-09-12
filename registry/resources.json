@@ -1,0 +1,38 @@
+{
+  "resources": [
+    {
+      "auth_type": "oauth2",
+      "category": "Development",
+      "description": "Official API for repositories, issues, pull requests, and workflows.",
+      "https": true,
+      "name": "GitHub REST",
+      "official_docs_location": "https://docs.github.com/en/rest",
+      "source": "galaxy-builtin",
+      "source_commit": "builtin-v1",
+      "verification_status": "verified"
+    },
+    {
+      "auth_type": "none",
+      "category": "Packages",
+      "description": "Official JSON metadata API for Python package releases.",
+      "https": true,
+      "name": "PyPI JSON API",
+      "official_docs_location": "https://docs.pypi.org/api/json/",
+      "source": "galaxy-builtin",
+      "source_commit": "builtin-v1",
+      "verification_status": "verified"
+    },
+    {
+      "auth_type": "none",
+      "category": "Weather",
+      "description": "Weather forecast API available without an API key.",
+      "https": true,
+      "name": "Open-Meteo",
+      "official_docs_location": "https://open-meteo.com/en/docs",
+      "source": "galaxy-builtin",
+      "source_commit": "builtin-v1",
+      "verification_status": "verified"
+    }
+  ],
+  "schema_version": 1
+}
