@@ -122,6 +122,7 @@ def _rollback_remove(project, target):
 
 
 V2_TRACKED_FILES = (
+    '.gitattributes',
     'AGENTS.md',
     '.galaxy/project.yml',
     '.galaxy/team.yml',

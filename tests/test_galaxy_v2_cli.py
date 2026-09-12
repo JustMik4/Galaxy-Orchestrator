@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from lib import galaxy as galaxy_cli
 from lib import installer
-from lib.project import load_project
-from tests.bootstrap.test_project import update_declaration_hashes
+from lib.project import ProjectConfigurationError, load_project
+from tests.bootstrap.test_project import TRACKED_DECLARATIONS, update_declaration_hashes
 from tests.migrations.test_v1_3_to_v2_0 import MigrationFixture
 
 
@@ -158,6 +158,51 @@ class GalaxyV2CliTests(unittest.TestCase):
         result = self.run_cli("install", self.project)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.project / ".github/workflows/galaxy-control.yml").exists())
+
+    def test_installed_project_survives_autocrlf_checkout(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        subprocess.run(
+            ["git", "config", "core.autocrlf", "false"], cwd=self.project, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=self.project, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Galaxy Test"],
+            cwd=self.project, check=True,
+        )
+        installer.install_v2(ROOT, self.project)
+        subprocess.run(["git", "add", "."], cwd=self.project, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "installed project"],
+            cwd=self.project, check=True,
+        )
+        checkout = Path(self.temporary.name) / "autocrlf checkout"
+        subprocess.run(
+            [
+                "git", "-c", "core.autocrlf=true", "clone", "-q",
+                self.project, checkout,
+            ],
+            check=True,
+        )
+
+        try:
+            loaded = load_project(checkout)
+        except ProjectConfigurationError as exc:
+            self.fail(f"autocrlf install checkout must load: {exc}")
+
+        self.assertEqual(loaded.team.mode, "SOLO")
+        self.assertEqual(
+            (checkout / ".gitattributes").read_bytes(),
+            (ROOT / "template/.gitattributes").read_bytes(),
+        )
+        for relative in TRACKED_DECLARATIONS:
+            self.assertEqual(
+                (checkout / relative).read_bytes(),
+                (self.project / relative).read_bytes(),
+                relative,
+            )
 
     def test_critical_preset_is_declarative_and_keeps_root_sol_medium(self):
         result = self.run_cli("install", self.project, "--preset", "critical")

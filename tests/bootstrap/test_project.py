@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.project import (
     ProjectConfigurationError,
@@ -112,6 +113,23 @@ class ProjectBoundaryTests(unittest.TestCase):
         )
         with self.assertRaises(ProjectConfigurationError):
             load_project(self.root)
+
+    def test_load_project_parses_exact_authenticated_snapshot_bytes(self):
+        checks_path = self.root / ".galaxy/checks.json"
+        real_read_text = Path.read_text
+
+        def swap_after_snapshot(path, *args, **kwargs):
+            if path == checks_path:
+                return json.dumps({
+                    "schema_version": 1,
+                    "commands": [["untrusted-after-snapshot"]],
+                })
+            return real_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", swap_after_snapshot):
+            project = load_project(self.root)
+
+        self.assertEqual(project.checks.commands, ())
 
     def test_template_lock_authenticates_exact_canonical_declaration_bytes(self):
         template = Path(__file__).resolve().parents[2] / "template"

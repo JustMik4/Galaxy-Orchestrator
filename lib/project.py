@@ -137,10 +137,18 @@ class PollutionReport:
 
 def _mapping(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        data = path.read_bytes()
     except FileNotFoundError as exc:
         raise ProjectConfigurationError(f"missing project declaration: {path.name}") from exc
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except OSError as exc:
+        raise ProjectConfigurationError(f"invalid JSON-compatible YAML in {path}: {exc}") from exc
+    return _mapping_bytes(data, path)
+
+
+def _mapping_bytes(data: bytes, path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise ProjectConfigurationError(f"invalid JSON-compatible YAML in {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ProjectConfigurationError(f"project declaration must be an object: {path}")
@@ -187,8 +195,7 @@ def _validate_lock_safety(value: Any, location: str = "galaxy.lock") -> None:
             raise ProjectConfigurationError(f"galaxy.lock must not contain a local path: {location}")
 
 
-def load_project_config(path: Path) -> ProjectConfig:
-    raw = _mapping(path)
+def _parse_project_config(raw: Mapping[str, Any]) -> ProjectConfig:
     schema = _schema(raw, "project")
     name = raw.get("name", "project")
     adapter = raw.get("adapter", "codex")
@@ -216,8 +223,11 @@ def load_project_config(path: Path) -> ProjectConfig:
     return ProjectConfig(schema, name.strip(), adapter, packs, names, vault, raw)
 
 
-def load_team(path: Path) -> TeamConfig:
-    raw = _mapping(path)
+def load_project_config(path: Path) -> ProjectConfig:
+    return _parse_project_config(_mapping(path))
+
+
+def _parse_team(raw: Mapping[str, Any]) -> TeamConfig:
     schema = _schema(raw, "team")
     mode = raw.get("mode")
     if mode not in ("SOLO", "CO-OP"):
@@ -227,8 +237,11 @@ def load_team(path: Path) -> TeamConfig:
     return TeamConfig(schema, mode, raw)
 
 
-def load_checks(path: Path) -> ChecksConfig:
-    raw = _mapping(path)
+def load_team(path: Path) -> TeamConfig:
+    return _parse_team(_mapping(path))
+
+
+def _parse_checks(raw: Mapping[str, Any]) -> ChecksConfig:
     schema = _schema(raw, "checks")
     commands = raw.get("commands", [])
     if not isinstance(commands, list):
@@ -241,8 +254,11 @@ def load_checks(path: Path) -> ChecksConfig:
     return ChecksConfig(schema, tuple(normalized), raw)
 
 
-def load_lock(path: Path) -> GalaxyLock:
-    raw = _mapping(path)
+def load_checks(path: Path) -> ChecksConfig:
+    return _parse_checks(_mapping(path))
+
+
+def _parse_lock(raw: Mapping[str, Any]) -> GalaxyLock:
     _validate_lock_safety(raw)
     schema = _schema(raw, "lock")
     galaxy = raw.get("galaxy")
@@ -291,6 +307,10 @@ def load_lock(path: Path) -> GalaxyLock:
     )
 
 
+def load_lock(path: Path) -> GalaxyLock:
+    return _parse_lock(_mapping(path))
+
+
 def load_project(root: Path | str) -> GalaxyProject:
     root_path = Path(root).resolve()
     if not root_path.is_dir():
@@ -300,17 +320,23 @@ def load_project(root: Path | str) -> GalaxyProject:
     if len(snapshot) != len(paths):
         missing = sorted(set(paths).difference(relative for relative, _ in snapshot))
         raise ProjectConfigurationError(f"missing project declarations: {', '.join(missing)}")
-    config = load_project_config(paths[".galaxy/project.yml"])
-    team = load_team(paths[".galaxy/team.yml"])
-    checks = load_checks(paths[".galaxy/checks.json"])
-    lock = load_lock(paths["galaxy.lock"])
     declaration_bytes = dict(snapshot)
+    lock = _parse_lock(_mapping_bytes(declaration_bytes["galaxy.lock"], paths["galaxy.lock"]))
     for relative, expected_digest in lock.declaration_hashes.items():
         actual_digest = hashlib.sha256(declaration_bytes[relative]).hexdigest()
         if actual_digest != expected_digest:
             raise ProjectConfigurationError(
                 f"project declaration does not match galaxy.lock: {relative}"
             )
+    config = _parse_project_config(_mapping_bytes(
+        declaration_bytes[".galaxy/project.yml"], paths[".galaxy/project.yml"]
+    ))
+    team = _parse_team(_mapping_bytes(
+        declaration_bytes[".galaxy/team.yml"], paths[".galaxy/team.yml"]
+    ))
+    checks = _parse_checks(_mapping_bytes(
+        declaration_bytes[".galaxy/checks.json"], paths[".galaxy/checks.json"]
+    ))
     if config.schema_version != lock.project_schema:
         raise ProjectConfigurationError("project schema does not match galaxy.lock")
     if config.specialist_packs != lock.specialist_packs or config.specialist_names != lock.specialist_names:

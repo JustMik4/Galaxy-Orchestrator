@@ -16,7 +16,7 @@ from lib.migrations import (
 )
 from lib.migrations import v1_3_to_v2_0 as migration_module
 from lib.doctor import CheckStatus, run_doctor
-from lib.project import load_project
+from lib.project import ProjectConfigurationError, load_project
 
 
 def _json(value):
@@ -93,6 +93,31 @@ class MigrationTests(unittest.TestCase):
             path.relative_to(self.project).as_posix(): path.read_bytes()
             for path in self.project.rglob("*") if path.is_file()
         }
+
+    def configure_coop_with_legacy_control(self, *, managed: bool = True) -> Path:
+        team_path = self.project / "AGENT_TEAM.yml"
+        team = json.loads(team_path.read_text(encoding="utf-8"))
+        team.update({
+            "mode": "CO-OP",
+            "operators": [{"id": "primary", "github_login": "alice"}],
+            "integration_operators": ["primary"],
+            "coordination": {"control_issue": 17},
+        })
+        team_path.write_bytes(_json(team))
+        workflow = self.project / ".github/workflows/multicontroller-control.yml"
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_bytes(
+            (ROOT / "coop/.github/workflows/multicontroller-control.yml").read_bytes()
+        )
+        if managed:
+            manifest_path = self.project / ".multicontroller/install-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["mode"] = "CO-OP"
+            manifest["files"][workflow.relative_to(self.project).as_posix()] = (
+                hashlib.sha256(workflow.read_bytes()).hexdigest()
+            )
+            manifest_path.write_bytes(_json(manifest))
+        return workflow
 
     def test_clean_preview_has_no_side_effects(self):
         (self.project / ".gitignore").write_text(".env\n", encoding="utf-8")
@@ -218,6 +243,89 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(
             (self.project / ".github/workflows/galaxy-control.yml").exists()
         )
+
+    def test_migration_preserves_existing_attributes_and_autocrlf_clone_loads(self):
+        attributes = self.project / ".gitattributes"
+        custom = b"*.bin binary\n# project policy\n"
+        attributes.write_bytes(custom)
+
+        receipt = apply(self.master, self.project)
+        first = attributes.read_bytes()
+        second = apply(self.master, self.project)
+
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(second["status"], "already_migrated")
+        self.assertEqual(attributes.read_bytes(), first)
+        self.assertTrue(first.startswith(custom))
+        _git(self.project, "init", "-q")
+        _git(self.project, "config", "core.autocrlf", "false")
+        _git(self.project, "config", "user.email", "test@example.invalid")
+        _git(self.project, "config", "user.name", "Galaxy Test")
+        _git(self.project, "add", ".")
+        _git(self.project, "commit", "-qm", "migrated project")
+        checkout = Path(self.temporary.name) / "autocrlf migrated checkout"
+        subprocess.run(
+            [
+                "git", "-c", "core.autocrlf=true", "clone", "-q",
+                self.project, checkout,
+            ],
+            check=True,
+        )
+        try:
+            loaded = load_project(checkout)
+        except ProjectConfigurationError as exc:
+            self.fail(f"autocrlf migrated checkout must load: {exc}")
+        self.assertEqual(loaded.team.mode, "SOLO")
+        self.assertEqual(
+            (checkout / ".gitattributes").read_bytes(), attributes.read_bytes()
+        )
+
+    def test_coop_migration_retires_manifest_proven_legacy_control_workflow(self):
+        legacy = self.configure_coop_with_legacy_control()
+
+        receipt = apply(self.master, self.project)
+
+        self.assertEqual(receipt["status"], "success")
+        self.assertFalse(legacy.exists())
+        self.assertEqual(
+            (self.project / ".github/workflows/galaxy-control.yml").read_bytes(),
+            (ROOT / "template/.github/workflows/galaxy-control.yml").read_bytes(),
+        )
+
+    def test_unmanaged_legacy_control_workflow_blocks_migration_without_mutation(self):
+        legacy = self.configure_coop_with_legacy_control(managed=False)
+        before = self.snapshot()
+
+        migration_plan = plan(self.master, self.project)
+
+        self.assertFalse(migration_plan.ready)
+        self.assertIn(
+            {
+                "path": ".github/workflows/multicontroller-control.yml",
+                "reason": "privileged-legacy-workflow-project-owned",
+                "expected_sha256": "manifest-entry-required",
+                "actual_sha256": hashlib.sha256(legacy.read_bytes()).hexdigest(),
+            },
+            migration_plan.conflicts,
+        )
+        with self.assertRaises(MigrationConflictError):
+            apply(self.master, self.project)
+        self.assertEqual(before, self.snapshot())
+
+    def test_modified_manifest_legacy_control_workflow_blocks_migration(self):
+        legacy = self.configure_coop_with_legacy_control()
+        legacy.write_bytes(b"project-modified privileged workflow\n")
+
+        migration_plan = plan(self.master, self.project)
+
+        self.assertFalse(migration_plan.ready)
+        conflict = next(
+            item for item in migration_plan.conflicts if item["path"] == (
+                ".github/workflows/multicontroller-control.yml"
+            )
+        )
+        self.assertEqual(conflict["reason"], "managed-file-user-modified")
+        self.assertEqual(legacy.read_bytes(), b"project-modified privileged workflow\n")
 
     def test_production_defaults_use_complete_project_and_doctor_boundaries(self):
         checks = self.project / ".multicontroller/checks.json"

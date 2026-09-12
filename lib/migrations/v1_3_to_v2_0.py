@@ -37,13 +37,15 @@ TO_VERSION = "2.0.0"
 
 TEAM = "AGENT_TEAM.yml"
 AGENTS = "AGENTS.md"
+ATTRIBUTES = ".gitattributes"
 CHECKS = ".multicontroller/checks.json"
 POLICY = ".multicontroller/policy.json"
 MANIFEST = ".multicontroller/install-manifest.json"
 OLD_WORKFLOW = ".github/workflows/multicontroller.yml"
+OLD_CONTROL_WORKFLOW = ".github/workflows/multicontroller-control.yml"
 CONTROL_WORKFLOW = ".github/workflows/galaxy-control.yml"
 
-PROJECT_OWNED = {AGENTS, TEAM, CHECKS}
+PROJECT_OWNED = {AGENTS, ATTRIBUTES, TEAM, CHECKS}
 GENERATED_PREFIXES = (
     ".codex/",
     ".agents/skills/multicontroller/",
@@ -54,6 +56,14 @@ GENERATED_PREFIXES = (
     ".multicontroller/cache/",
     ".multicontroller/install/",
     ".multicontroller/local/",
+)
+
+DECLARATION_ATTRIBUTE_RULES = (
+    b".gitattributes -text",
+    b"AGENTS.md -text",
+    b".galaxy/project.yml -text",
+    b".galaxy/team.yml -text",
+    b".galaxy/checks.json -text",
 )
 
 
@@ -212,6 +222,19 @@ def _ignore_bytes(project: Path) -> bytes:
     return original + separator + rules
 
 
+def _attributes_bytes(project: Path) -> bytes:
+    path = project / ATTRIBUTES
+    original = path.read_bytes() if path.is_file() else b""
+    existing = set(original.splitlines())
+    missing = [rule for rule in DECLARATION_ATTRIBUTE_RULES if rule not in existing]
+    if not missing:
+        return original
+    marker = b"# Galaxy declaration integrity"
+    additions = ([] if marker in existing else [marker]) + missing
+    separator = b"" if not original or original.endswith((b"\n", b"\r")) else b"\n"
+    return original + separator + b"\n".join(additions) + b"\n"
+
+
 def _vault_inventory(project: Path) -> tuple[str, ...]:
     found: set[str] = set()
     for relative in (".obsidian", ".multicontroller/vault", ".galaxy/vault"):
@@ -368,6 +391,7 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     }
     writes: dict[str, bytes] = dict(declarations)
     writes["galaxy.lock"] = _lock_bytes(master, declarations)
+    writes[ATTRIBUTES] = _attributes_bytes(project)
     writes[".gitignore"] = _ignore_bytes(project)
     transformations: list[dict[str, str]] = [
         {"source": TEAM, "destination": ".galaxy/team.yml", "rule": "team-json-schema"},
@@ -386,6 +410,26 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
     deletes.extend(
         name for name in unchanged if name.startswith(".codex/")
     )
+    legacy_control = checked_project_path(project, OLD_CONTROL_WORKFLOW)
+    if legacy_control.is_file():
+        workflow_expected = entries.get(OLD_CONTROL_WORKFLOW)
+        workflow_current = digest(legacy_control.read_bytes())
+        if workflow_expected is None:
+            project_owned.add(OLD_CONTROL_WORKFLOW)
+            preserved.add(OLD_CONTROL_WORKFLOW)
+            conflicts.append({
+                "path": OLD_CONTROL_WORKFLOW,
+                "reason": "privileged-legacy-workflow-project-owned",
+                "expected_sha256": "manifest-entry-required",
+                "actual_sha256": workflow_current,
+            })
+        elif workflow_current == workflow_expected:
+            deletes.append(OLD_CONTROL_WORKFLOW)
+            transformations.append({
+                "source": OLD_CONTROL_WORKFLOW,
+                "destination": CONTROL_WORKFLOW,
+                "rule": "control-workflow-v1-to-v2",
+            })
     if (project / OLD_WORKFLOW).is_file():
         workflow_expected = entries.get(OLD_WORKFLOW)
         workflow_current = digest((project / OLD_WORKFLOW).read_bytes())
@@ -403,9 +447,9 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
 
     for destination, content in writes.items():
         target = checked_project_path(project, destination)
-        if destination == ".gitignore":
-            # _ignore_bytes is a semantic append derived from the exact current
-            # bytes, so an existing project-owned ignore file is expected.
+        if destination in {ATTRIBUTES, ".gitignore"}:
+            # These project-owned policy files are semantic appends derived
+            # from their exact current bytes, so existing content is expected.
             continue
         if target.exists() and (not target.is_file() or target.read_bytes() != content):
             conflicts.append({
@@ -424,7 +468,9 @@ def plan(master: Path | str, project: Path | str) -> MigrationPlan:
         for path in project.rglob("*") if path.is_file() and ".git" not in path.relative_to(project).parts
     }
     transformed_sources = {item["source"] for item in transformations}
-    preserved.update(all_files - set(writes) - transformed_sources - set(untrack))
+    preserved.update(
+        all_files - set(writes) - transformed_sources - set(untrack) - set(deletes)
+    )
     status = "conflict" if conflicts else "ready"
     return MigrationPlan(
         MIGRATION_ID,
