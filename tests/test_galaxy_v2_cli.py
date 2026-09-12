@@ -204,6 +204,53 @@ class GalaxyV2CliTests(unittest.TestCase):
                 relative,
             )
 
+    def test_install_merges_existing_gitattributes_rules_deterministically(self):
+        attributes = self.project / ".gitattributes"
+        project_rules = b"*.png binary\n# project attributes\n"
+        attributes.write_bytes(project_rules)
+
+        first = installer.install_v2(ROOT, self.project)
+        merged = attributes.read_bytes()
+        second = installer.install_v2(ROOT, self.project)
+
+        self.assertIn(".gitattributes", first["changed"])
+        self.assertEqual(second["changed"], [])
+        self.assertEqual(attributes.read_bytes(), merged)
+        self.assertTrue(merged.startswith(project_rules))
+        self.assertEqual(merged.count(b"# Galaxy declaration integrity\n"), 1)
+        for rule in (ROOT / "template/.gitattributes").read_bytes().splitlines():
+            self.assertEqual(merged.splitlines().count(rule), 1, rule)
+
+    def test_repeat_install_preserves_user_added_gitattributes_rules(self):
+        installer.install_v2(ROOT, self.project)
+        attributes = self.project / ".gitattributes"
+        user_rule = b"docs/** linguist-documentation\n"
+        attributes.write_bytes(attributes.read_bytes() + user_rule)
+        before = attributes.read_bytes()
+
+        result = installer.install_v2(ROOT, self.project)
+
+        self.assertEqual(result["changed"], [])
+        self.assertEqual(attributes.read_bytes(), before)
+
+    def test_install_check_reports_attributes_merge_without_mutation(self):
+        attributes = self.project / ".gitattributes"
+        attributes.write_bytes(b"*.png binary\n")
+        before = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+
+        result = self.run_cli("install", self.project, "--check")
+
+        after = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(".gitattributes", json.loads(result.stdout)["changed"])
+        self.assertEqual(after, before)
+
     def test_critical_preset_is_declarative_and_keeps_root_sol_medium(self):
         result = self.run_cli("install", self.project, "--preset", "critical")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -550,6 +597,31 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertEqual(
             [path.name for path in self.project.iterdir()],
             ["AGENTS.md"],
+        )
+
+    def test_v2_attributes_merge_refuses_concurrent_user_edit(self):
+        real_safe_path = installer.safe_path
+        target = self.project / ".gitattributes"
+        target.write_bytes(b"*.png binary\n")
+        concurrent = b"*.png binary\n*.zip binary\n"
+        resolutions = 0
+
+        def interleaved(value):
+            nonlocal resolutions
+            resolved = real_safe_path(value)
+            if resolved == target:
+                resolutions += 1
+                if resolutions == 3:
+                    target.write_bytes(concurrent)
+            return resolved
+
+        with patch.object(installer, "safe_path", side_effect=interleaved):
+            with self.assertRaisesRegex(ValueError, "changed concurrently"):
+                installer.install_v2(ROOT, self.project)
+        self.assertEqual(target.read_bytes(), concurrent)
+        self.assertEqual(
+            [path.name for path in self.project.iterdir()],
+            [".gitattributes"],
         )
 
     def test_v2_install_rollback_never_follows_replaced_symlink(self):

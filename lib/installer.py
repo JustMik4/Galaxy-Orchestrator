@@ -142,6 +142,8 @@ V2_COOP_FILES = (
     '.github/workflows/galaxy-control.yml',
 )
 
+GALAXY_ATTRIBUTES_MARKER = b'# Galaxy declaration integrity'
+
 V1_TEMPLATE_FILES = (
     'AGENT_TEAM.yml',
     'AGENTS.md',
@@ -183,6 +185,21 @@ V1_COOP_FILES = (
     '.github/workflows/multicontroller-control.yml',
     '.github/workflows/multicontroller.yml',
 )
+
+
+def _merge_gitattributes(original, canonical):
+    """Preserve project rules while ensuring every canonical Galaxy rule exists."""
+    if not original:
+        return canonical
+    existing = set(original.splitlines())
+    missing = [rule for rule in canonical.splitlines() if rule and rule not in existing]
+    if not missing:
+        return original
+    additions = (
+        [] if GALAXY_ATTRIBUTES_MARKER in existing else [GALAXY_ATTRIBUTES_MARKER]
+    ) + missing
+    separator = b'' if original.endswith((b'\n', b'\r')) else b'\n'
+    return original + separator + b'\n'.join(additions) + b'\n'
 
 
 def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
@@ -262,7 +279,12 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
                 if not target.is_file():
                     raise ValueError('Expected a file: ' + name)
                 current = target.read_bytes()
-                if current != content and name == '.git/info/exclude' and current == exclude_original:
+                if name == '.gitattributes':
+                    content = _merge_gitattributes(current, content)
+                    if current != content:
+                        changes[name] = content
+                        expected_current[name] = current
+                elif current != content and name == '.git/info/exclude' and current == exclude_original:
                     changes[name] = content
                     expected_current[name] = current
                 elif current != content:
