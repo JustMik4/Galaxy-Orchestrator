@@ -126,15 +126,21 @@ Também execute as suítes focadas de routing/quota, runtime/review, specialists
 
 No checkout V2 integrado em Windows:
 
-- `python -m unittest discover -s tests -v`: **184 testes passaram**, zero falhas e um skip;
-- o skip foi somente o caso que cria um symlink real, indisponível sem o privilégio do Windows (`WinError 1314`); validação e revisão estática de symlink/junction/reparse permaneceram cobertas;
+- `python -m unittest discover -s tests -v`: **244 testes executados**, **242 passaram**, zero falhas e dois skips;
+- os skips foram somente casos que criam symlink real, indisponível sem o privilégio do Windows (`WinError 1314`); testes de junction/reparse sem esse privilégio, identidade de diretório e revisão estática permaneceram cobertos;
 - `python -m compileall -q lib tests galaxy.py multicontroller.py`: passou;
+- sincronização explícita do lock, incluindo snapshot autenticado, clone `autocrlf`, concorrência, staging e promoção por handle: passou;
 - parsing dos três scripts PowerShell e execução dos entrypoints `galaxy.py` e `lib/galaxy.py`: passaram;
+- `RELEASE-MANIFEST.json` correspondeu a todos os blobs rastreados da release;
 - `git diff --check`: passou.
 
-O smoke V1.3→V2 usou um clone local descartável do `HEAD` da Lexy. A árvore original, que continha
-uma alteração local do usuário, permaneceu intocada. Preview e aplicação terminaram com receipt e backup;
-o Doctor retornou zero `FAIL`, 17 `PASS`, dois `WARN` esperados (resíduos V1 locais e templates de
+O smoke V1.3→V2 mais recente usou o clone local descartável
+`C:\AI\Galaxy-Lexy-Smoke-1789225312244-582570271` do `HEAD` `6a2cd68` da Lexy. A árvore original,
+que continha `M tests/test_event_bus.py`, permaneceu intocada no mesmo commit. Preview e aplicação
+terminaram com status `success`; o receipt foi gravado em
+`local/migrations/66756950293a4aad8db919d4a2b32fbc/receipt.json` do master. O bootstrap posterior em
+`--check` ficou sem create/update/remove/drift e sem poluição rastreada. O Doctor retornou zero `FAIL`,
+17 `PASS`, dois `WARN` esperados (resíduos V1 locais e templates de
 ambiente duplicados) e três `UNKNOWN` honestos (runtime, quota e action capability não fornecidos).
 No clone migrado, a suíte do produto passou com **284 testes** e `pip check` informou zero dependências
 quebradas.
