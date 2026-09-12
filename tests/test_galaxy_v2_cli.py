@@ -332,7 +332,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertIn(".codex/config.toml", payload["create"])
         self.assertFalse(missing.exists())
 
-    def test_specialists_sync_check_generated_update_exits_one(self):
+    def test_specialists_sync_check_marker_retaining_human_edit_is_drift(self):
         install = self.run_cli("install", self.project)
         self.assertEqual(install.returncode, 0, install.stderr)
         config = self.project / ".codex/config.toml"
@@ -341,7 +341,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         result = self.run_cli("specialists", "sync", self.project, "--check")
         self.assertEqual(result.returncode, 1, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertIn(".codex/config.toml", payload["update"])
+        self.assertIn(".codex/config.toml", payload["drift"])
         self.assertTrue(config.read_text(encoding="utf-8").endswith("# stale\n"))
 
     def test_specialists_sync_check_preserves_planned_removal_and_exits_one(self):
@@ -482,6 +482,7 @@ class GalaxyV2CliTests(unittest.TestCase):
             "title": "Integrate CLI",
             "status": "complete",
             "revision": 1,
+            "source_receipt": "receipt-1",
             "prompt": "must not be exported",
         }]), encoding="utf-8")
 
@@ -604,9 +605,48 @@ class GalaxyV2CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for command in (
             "install", "bootstrap", "migrate", "validate", "doctor",
-            "specialists", "cleanup", "vault", "decide", "gate", "reclaim",
+            "specialists", "cleanup", "vault", "dispatch", "decide", "gate", "reclaim",
         ):
             self.assertIn(command, result.stdout)
+
+    def test_dispatch_cli_is_operational_and_installed_instructions_require_it(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        request = Path(self.temporary.name) / "dispatch-request.json"
+        capabilities = Path(self.temporary.name) / "capabilities.json"
+        quota = Path(self.temporary.name) / "quota.json"
+        request.write_text(json.dumps({
+            "task_class": "implementation", "required_capability": 3,
+        }), encoding="utf-8")
+        capabilities.write_text(json.dumps({
+            "configured": [
+                {"model": "luna", "effort": "medium", "capability": 2, "expected_cost": 1},
+                {"model": "terra", "effort": "medium", "capability": 3, "expected_cost": 2},
+            ],
+            "observed": [
+                {"model": "luna", "effort": "medium"},
+                {"model": "terra", "effort": "medium"},
+            ],
+        }), encoding="utf-8")
+        quota.write_text(json.dumps({
+            "five_hour_remaining": 90, "weekly_remaining": 80,
+        }), encoding="utf-8")
+
+        result = self.run_cli(
+            "dispatch", "authorize", self.project,
+            "--request", request, "--capabilities", capabilities, "--quota", quota,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["authorized"])
+        self.assertEqual(payload["route"], {"model": "terra", "effort": "medium"})
+        instructions = (self.project / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "galaxy dispatch authorize", "galaxy dispatch verify",
+            "galaxy dispatch review-check", "galaxy dispatch review-record",
+        ):
+            self.assertIn(phrase, instructions)
 
     def test_v2_install_refuses_concurrent_file_and_preserves_it(self):
         real_safe_path = installer.safe_path
@@ -738,9 +778,11 @@ class GalaxyV2CliTests(unittest.TestCase):
             "https://github.com/JustMik4/Galaxy-Orchestrator",
             "galaxy.lock", "source_revision", "version",
             "^[0-9a-fA-F]{40}$", "FETCH_HEAD", "rev-parse", "galaxy.py",
-            "validate", "--gate",
+            "bootstrap", "validate", "--gate",
         ):
             self.assertIn(required, script)
+        self.assertLess(script.index("bootstrap"), script.index("validate"))
+        self.assertEqual(script.count("Join-Path $toolRoot 'galaxy.py'"), 2)
         self.assertIn("shell: pwsh", workflow)
         self.assertIn("persist-credentials: false", workflow)
 

@@ -33,6 +33,10 @@ def _load_snapshots(paths: list[str]) -> list[dict]:
     return snapshots
 
 
+def _load_json(path: str):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def _bootstrap_check_failed(result) -> bool:
     return bool(result.create or result.update or result.removed or result.drift)
 
@@ -85,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
             "  validate PROJECT [--gate]\n"
             "  doctor PROJECT [--json]\n"
             "  lock sync PROJECT [--check]\n"
+            "  dispatch authorize PROJECT --request FILE --capabilities FILE --quota FILE\n"
+            "  dispatch verify PROJECT --dispatch-id ID --spawn-id ID --effective-model MODEL --effective-effort EFFORT\n"
+            "  dispatch review-check PROJECT --fingerprint FILE\n"
+            "  dispatch review-record PROJECT --fingerprint FILE --evidence FILE\n"
             "  specialists list\n"
             "  specialists sync PROJECT [--check]\n"
             "  cleanup PROJECT [--preview | --apply]\n"
@@ -92,6 +100,87 @@ def main(argv: list[str] | None = None) -> int:
             "  vault sync PROJECT [--snapshot FILE] [--check] [--force]\n\n"
             "Legacy policy commands:\n"
             "  decide usage reputation dag gate grant reclaim\n"
+        )
+        return 0
+    if arguments and arguments[:2] == ["dispatch", "authorize"]:
+        parser = argparse.ArgumentParser(prog="galaxy dispatch authorize")
+        parser.add_argument("project")
+        parser.add_argument("--request", required=True)
+        parser.add_argument("--capabilities", required=True)
+        parser.add_argument("--quota", required=True)
+        parser.add_argument("--operator-config")
+        options = parser.parse_args(arguments[2:])
+        try:
+            from .dispatch import DispatchCoordinator
+            payload = {
+                "command": "dispatch authorize",
+                **DispatchCoordinator(
+                    options.project, operator_config=options.operator_config,
+                ).authorize(
+                    _load_json(options.request), _load_json(options.capabilities),
+                    _load_json(options.quota),
+                ),
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if payload["authorized"] else 1
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            print(json.dumps({"command": "dispatch authorize", "error": str(exc)},
+                             ensure_ascii=False, sort_keys=True), file=sys.stderr)
+            return 1
+    if arguments and arguments[:2] == ["dispatch", "verify"]:
+        parser = argparse.ArgumentParser(prog="galaxy dispatch verify")
+        parser.add_argument("project")
+        parser.add_argument("--dispatch-id", required=True)
+        parser.add_argument("--spawn-id", required=True)
+        parser.add_argument("--effective-model")
+        parser.add_argument("--effective-effort")
+        parser.add_argument("--parent-thread")
+        options = parser.parse_args(arguments[2:])
+        try:
+            from .dispatch import DispatchCoordinator
+            payload = {"command": "dispatch verify", **DispatchCoordinator(
+                options.project,
+            ).verify(
+                options.dispatch_id, spawn_id=options.spawn_id,
+                effective_model=options.effective_model,
+                effective_effort=options.effective_effort,
+                parent_thread=options.parent_thread,
+            )}
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if payload["status"] == "VERIFIED" else 1
+        except (OSError, ValueError, KeyError) as exc:
+            print(json.dumps({"command": "dispatch verify", "error": str(exc)},
+                             ensure_ascii=False, sort_keys=True), file=sys.stderr)
+            return 1
+    if arguments and arguments[:2] in (
+        ["dispatch", "review-check"], ["dispatch", "review-record"],
+    ):
+        command = arguments[1]
+        parser = argparse.ArgumentParser(prog="galaxy dispatch " + command)
+        parser.add_argument("project")
+        parser.add_argument("--fingerprint", required=True)
+        if command == "review-record":
+            parser.add_argument("--evidence", required=True)
+        options = parser.parse_args(arguments[2:])
+        try:
+            from .dispatch import DispatchCoordinator
+            coordinator = DispatchCoordinator(options.project)
+            if command == "review-check":
+                result = coordinator.review_lookup(_load_json(options.fingerprint))
+            else:
+                result = coordinator.review_record(
+                    _load_json(options.fingerprint), _load_json(options.evidence),
+                )
+            payload = {"command": "dispatch " + command, **result}
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if payload["reusable"] else 1
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            print(json.dumps({"command": "dispatch " + command, "error": str(exc)},
+                             ensure_ascii=False, sort_keys=True), file=sys.stderr)
+            return 1
+    if arguments in (["dispatch"], ["dispatch", "--help"], ["dispatch", "-h"]):
+        print(
+            "usage: galaxy dispatch {authorize,verify,review-check,review-record} ..."
         )
         return 0
     if arguments and arguments[:2] == ["lock", "sync"]:

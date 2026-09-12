@@ -51,4 +51,5 @@ jobs:
             & git -C $toolRoot fetch --quiet --depth 1 origin $refspec
             & git -C $toolRoot checkout --quiet --detach "refs/tags/${revision}^{commit}"
           }
+          & py -3.11 (Join-Path $toolRoot 'galaxy.py') bootstrap $env:GITHUB_WORKSPACE
           & py -3.11 (Join-Path $toolRoot 'galaxy.py') validate $env:GITHUB_WORKSPACE --gate

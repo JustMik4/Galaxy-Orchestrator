@@ -15,5 +15,14 @@ The generated root agent uses Sol at medium reasoning effort. Specialists are
 loaded only from the explicit hot set. Browser fallback requires explicit
 operator approval, and external LLM providers are not part of this project.
 
+Before every subagent dispatch, retry, or escalation, run
+`galaxy dispatch authorize PROJECT --request FILE --capabilities FILE --quota FILE`
+and spawn only the exact model/effort pair it authorizes. Immediately after
+spawn, run `galaxy dispatch verify` with the dispatch ID and effective host
+telemetry; an unverified or mismatched route is a `host-routing` blocker, not a
+model-quality failure. Before an expensive review, run
+`galaxy dispatch review-check`; reuse evidence only on an exact fingerprint
+match, and persist new completed evidence with `galaxy dispatch review-record`.
+
 The optional Obsidian vault declaration is disabled by default. Vault sync is
 always explicit and must not export prompts, responses, telemetry, or secrets.

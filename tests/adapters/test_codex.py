@@ -20,7 +20,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIn('model = "gpt-5.6-sol"', first[".codex/config.toml"])
         self.assertIn('model_reasoning_effort = "medium"', first[".codex/config.toml"])
         self.assertIn("[agents.architect]", first[".codex/config.toml"])
-        self.assertIn('model = "gpt-5.6-sol"', first[".codex/agents/architect.toml"])
+        self.assertNotIn('model = ', first[".codex/agents/architect.toml"])
+        self.assertNotIn('model_reasoning_effort = ', first[".codex/agents/architect.toml"])
+        self.assertIn('explicit model and effort authorized by galaxy dispatch',
+                      first[".codex/agents/architect.toml"])
         self.assertIn(".codex/skills/git/SKILL.md", first)
         self.assertIn(".codex/skills/python-testing/SKILL.md", first)
         self.assertNotIn(".codex/skills/python-debugging/SKILL.md", first)

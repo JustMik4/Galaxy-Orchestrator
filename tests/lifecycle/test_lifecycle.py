@@ -128,6 +128,45 @@ class LifecycleTests(unittest.TestCase):
             apply_runtime_cleanup(plan, apply=True)
         self.assertTrue(target.exists())
 
+    def test_runtime_replacement_with_same_mtime_and_size_is_refused_by_identity(self):
+        runtime = self.repo / ".galaxy" / "runtime"
+        runtime.mkdir(parents=True)
+        target = runtime / "old.tmp"
+        target.write_text("first")
+        old_stamp = time.time() - 10 * 86400
+        os.utime(target, (old_stamp, old_stamp))
+        plan = plan_runtime_cleanup(self.repo, retention_days=3, now=time.time())
+        replacement = runtime / "replacement.tmp"
+        replacement.write_text("other")
+        os.utime(replacement, (old_stamp, old_stamp))
+        os.replace(replacement, target)
+
+        with self.assertRaisesRegex(RuntimeError, "changed after preview"):
+            apply_runtime_cleanup(plan, apply=True)
+        self.assertEqual(target.read_text(), "other")
+
+    @unittest.skipUnless(os.name == "nt", "junction regression is Windows-specific")
+    def test_runtime_junction_to_product_source_is_rejected_without_deletion(self):
+        source = self.repo / "src"
+        source.mkdir()
+        keep = source / "keep.py"
+        keep.write_text("keep = True\n")
+        old_stamp = time.time() - 10 * 86400
+        os.utime(keep, (old_stamp, old_stamp))
+        runtime = self.repo / ".galaxy/runtime"
+        runtime.parent.mkdir(parents=True)
+        created = subprocess.run([
+            "cmd", "/c", "mklink", "/J", str(runtime), str(source),
+        ], text=True, capture_output=True, check=False)
+        if created.returncode:
+            self.skipTest("directory junction creation unavailable")
+        self.addCleanup(lambda: runtime.rmdir() if runtime.exists() else None)
+
+        with self.assertRaisesRegex(ValueError, "link/reparse"):
+            plan_runtime_cleanup(self.repo, retention_days=3, now=time.time())
+
+        self.assertTrue(keep.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

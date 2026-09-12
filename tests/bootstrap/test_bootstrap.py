@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,13 @@ class FakeRenderer:
             ".codex/agents/root.toml": 'model = "gpt-5.6-sol"\nreasoning_effort = "medium"\n',
             ".codex/hot.txt": names + "\n",
         }
+
+
+class EvolvedRenderer(FakeRenderer):
+    def render(self, hot_set):
+        result = super().render(hot_set)
+        result[".codex/hot.txt"] = "evolved\n"
+        return result
 
 
 class BootstrapTests(unittest.TestCase):
@@ -51,6 +59,66 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual((self.root / ".codex/hot.txt").read_text().splitlines()[-1], "core,git")
         self.assertFalse((self.root / ".multicontroller/tools").exists())
         self.assertFalse((self.root / ".galaxy/tools").exists())
+        state = json.loads((self.root / ".galaxy/install/bootstrap-state.json").read_text())
+        self.assertEqual(state["schema_version"], 1)
+        self.assertIn(".codex/hot.txt", state["artifacts"])
+
+    def test_template_evolution_updates_only_bytes_recorded_as_generated(self):
+        bootstrap(self.root, catalog_root=self.catalog, renderer=FakeRenderer(), verify_catalog=False)
+
+        result = bootstrap(
+            self.root, catalog_root=self.catalog, renderer=EvolvedRenderer(), verify_catalog=False,
+        )
+
+        self.assertIn(".codex/hot.txt", result.update)
+        self.assertEqual((self.root / ".codex/hot.txt").read_text().splitlines()[-1], "evolved")
+
+    def test_marker_retaining_user_edit_is_drift_and_preserved(self):
+        bootstrap(self.root, catalog_root=self.catalog, renderer=FakeRenderer(), verify_catalog=False)
+        target = self.root / ".codex/hot.txt"
+        edited = target.read_bytes().replace(b"core,git", b"human-choice")
+        target.write_bytes(edited)
+
+        with self.assertRaisesRegex(BootstrapError, "drift"):
+            bootstrap(self.root, catalog_root=self.catalog, renderer=EvolvedRenderer(), verify_catalog=False)
+
+        self.assertEqual(target.read_bytes(), edited)
+
+    def test_missing_or_corrupt_state_cannot_authorize_template_evolution(self):
+        for index, content in enumerate((None, b"not-json", b"[]")):
+            with self.subTest(content=content):
+                root = Path(self.temporary.name) / f"state-case-{index}"
+                root.mkdir()
+                write_project(root)
+                bootstrap(root, catalog_root=self.catalog, renderer=FakeRenderer(), verify_catalog=False)
+                state = root / ".galaxy/install/bootstrap-state.json"
+                if content is None:
+                    state.unlink()
+                else:
+                    state.write_bytes(content)
+                before = (root / ".codex/hot.txt").read_bytes()
+                with self.assertRaisesRegex(BootstrapError, "drift"):
+                    bootstrap(root, catalog_root=self.catalog, renderer=EvolvedRenderer(), verify_catalog=False)
+                self.assertEqual((root / ".codex/hot.txt").read_bytes(), before)
+
+    def test_failed_artifact_application_does_not_advance_bootstrap_state(self):
+        bootstrap(self.root, catalog_root=self.catalog, renderer=FakeRenderer(), verify_catalog=False)
+        state = self.root / ".galaxy/install/bootstrap-state.json"
+        before = state.read_bytes()
+        real_atomic_write = __import__("lib.bootstrap", fromlist=["_atomic_write"])._atomic_write
+
+        def fail_second(path, content):
+            if Path(path).as_posix().endswith("/.codex/hot.txt"):
+                raise OSError("simulated write failure")
+            return real_atomic_write(path, content)
+
+        with patch("lib.bootstrap._atomic_write", side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, "simulated write failure"):
+                bootstrap(
+                    self.root, catalog_root=self.catalog, renderer=EvolvedRenderer(),
+                    verify_catalog=False,
+                )
+        self.assertEqual(state.read_bytes(), before)
 
     def test_generated_drift_is_refused_and_declarations_are_unchanged(self):
         declaration = self.root / ".galaxy/project.yml"

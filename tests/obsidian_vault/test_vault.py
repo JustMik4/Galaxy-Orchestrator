@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +46,39 @@ class VaultTests(unittest.TestCase):
         for word in ('do not export', 'tokens', 'account_id', 'secret'):
             self.assertNotIn(word, first)
 
+    def test_dependencies_must_be_scalar_task_identifiers_and_never_leak_nested_secrets(self):
+        nested = {**self.snapshot, 'dependencies': [{'task_id': 'T-0', 'token': 'example-secret'}]}
+        with self.assertRaisesRegex(VaultError, 'dependencies'):
+            render_task_note(nested)
+        self.assertNotIn('example-secret', render_task_note({
+            **self.snapshot, 'dependencies': ['T-0', 'T-2'],
+        }))
+
+    def test_include_and_exclude_policy_is_applied_before_rendering(self):
+        without_tasks = sync(self.project, {
+            'enabled': True, 'path': '.galaxy/vault', 'include': ['summaries'],
+        }, [self.snapshot])
+        self.assertNotIn('tasks/T-1.md', without_tasks['written'])
+        self.assertFalse((self.project / '.galaxy/vault/tasks/T-1.md').exists())
+
+        other = Path(self.tmp.name) / 'other'
+        other.mkdir()
+        result = sync(other, {
+            'enabled': True, 'path': '.galaxy/vault', 'include': ['tasks'],
+            'exclude': ['dependencies', 'risk'],
+        }, [{**self.snapshot, 'dependencies': ['T-0'], 'risk': 'critical'}])
+        note = other / '.galaxy/vault/tasks/T-1.md'
+        self.assertIn('tasks/T-1.md', result['written'])
+        self.assertNotIn('dependencies:', note.read_text(encoding='utf-8'))
+        self.assertNotIn('risk:', note.read_text(encoding='utf-8'))
+
+    def test_exclude_cannot_remove_authoritative_frontmatter(self):
+        with self.assertRaisesRegex(VaultError, 'required vault fields'):
+            sync(self.project, {
+                'enabled': True, 'path': '.galaxy/vault',
+                'exclude': ['source_receipt'],
+            }, [self.snapshot])
+
     def test_sync_creates_obsidian_marker_and_notes(self):
         result = sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot])
         vault = self.project / '.galaxy' / 'vault'
@@ -78,6 +113,63 @@ class VaultTests(unittest.TestCase):
         result = sync(self.project, config, [], force=True)
         self.assertTrue(Path(result['backup'], 'tasks/T-1.md').is_file())
         self.assertFalse((self.project / '.galaxy/vault/tasks/T-1.md').exists())
+
+    def test_force_never_allows_revision_downgrade_or_equal_receipt_mismatch(self):
+        config = {'enabled': True, 'path': '.galaxy/vault'}
+        current = {**self.snapshot, 'revision': 7, 'source_receipt': 'receipt-7'}
+        sync(self.project, config, [current])
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        before = note.read_bytes()
+        for stale in (
+            {**self.snapshot, 'revision': 6, 'source_receipt': 'receipt-6'},
+            {**self.snapshot, 'revision': 7, 'source_receipt': 'different-receipt'},
+        ):
+            with self.subTest(stale=stale):
+                with self.assertRaisesRegex(VaultError, 'revision|receipt'):
+                    sync(self.project, config, [stale], force=True)
+                self.assertEqual(note.read_bytes(), before)
+
+    def test_sync_rejects_missing_authoritative_receipt(self):
+        with self.assertRaisesRegex(VaultError, 'source_receipt'):
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [
+                {**self.snapshot, 'source_receipt': ''},
+            ])
+
+    @unittest.skipUnless(os.name == 'nt', 'junction regression is Windows-specific')
+    def test_descendant_tasks_junction_cannot_write_outside_vault(self):
+        vault = self.project / '.galaxy/vault'
+        vault.mkdir(parents=True)
+        outside = Path(self.tmp.name) / 'outside'
+        outside.mkdir()
+        junction = vault / 'tasks'
+        created = subprocess.run([
+            'cmd', '/c', 'mklink', '/J', str(junction), str(outside),
+        ], text=True, capture_output=True, check=False)
+        if created.returncode:
+            self.skipTest('directory junction creation unavailable')
+        self.addCleanup(lambda: junction.rmdir() if junction.exists() else None)
+
+        with self.assertRaisesRegex(VaultError, 'symlink/reparse'):
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot], force=True)
+
+        self.assertFalse((outside / 'T-1.md').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'junction regression is Windows-specific')
+    def test_status_rejects_deep_descendant_junction_even_when_not_expected(self):
+        vault = self.project / '.galaxy/vault'
+        archive = vault / 'tasks/archive'
+        archive.parent.mkdir(parents=True)
+        outside = Path(self.tmp.name) / 'outside-status'
+        outside.mkdir()
+        created = subprocess.run([
+            'cmd', '/c', 'mklink', '/J', str(archive), str(outside),
+        ], text=True, capture_output=True, check=False)
+        if created.returncode:
+            self.skipTest('directory junction creation unavailable')
+        self.addCleanup(lambda: archive.rmdir() if archive.exists() else None)
+
+        with self.assertRaisesRegex(VaultError, 'symlink/reparse'):
+            status(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot])
 
     def test_project_owned_conflict_preserves_human_note_and_incoming_snapshot(self):
         config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'project-owned'}
