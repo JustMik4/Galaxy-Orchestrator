@@ -11,6 +11,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import stat
 from typing import Any, Iterable
+import uuid
 
 
 _DEFAULT_ROOTS = (".galaxy/runtime", ".galaxy/cache", ".galaxy/tmp",
@@ -278,34 +279,118 @@ def _delete_posix_file(
     project: Path, relative: PurePosixPath,
     expected: tuple[int, int, int, int, int],
 ) -> None:
-    """Anchor traversal to opened no-follow directory descriptors."""
+    """Move into a private anchored directory, then verify and delete that inode."""
     directory_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
     directory_flags |= getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
     file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
     descriptors = []
+    stage_fd = None
+    candidate_fd = None
+    stage_name = '.galaxy-cleanup-' + uuid.uuid4().hex
+    staged_name = 'candidate'
+    moved = False
     try:
         parent_fd = os.open(project, directory_flags)
         descriptors.append(parent_fd)
         for part in relative.parts[:-1]:
             parent_fd = os.open(part, directory_flags, dir_fd=parent_fd)
             descriptors.append(parent_fd)
-        descriptor = os.open(relative.name, file_flags, dir_fd=parent_fd)
-        descriptors.append(descriptor)
-        opened = os.fstat(descriptor)
+        os.mkdir(stage_name, mode=0o700, dir_fd=parent_fd)
+        stage_fd = os.open(stage_name, directory_flags, dir_fd=parent_fd)
+        os.rename(
+            relative.name, staged_name,
+            src_dir_fd=parent_fd, dst_dir_fd=stage_fd,
+        )
+        moved = True
+        _after_posix_stage(parent_fd, stage_fd, relative.name, staged_name)
+        candidate_fd = os.open(staged_name, file_flags, dir_fd=stage_fd)
+        opened = os.fstat(candidate_fd)
         opened_identity = (
             opened.st_dev, opened.st_ino, opened.st_size,
             opened.st_mtime_ns, opened.st_mode,
         )
-        named = os.stat(relative.name, dir_fd=parent_fd, follow_symlinks=False)
+        named = os.stat(staged_name, dir_fd=stage_fd, follow_symlinks=False)
         named_identity = (
             named.st_dev, named.st_ino, named.st_size,
             named.st_mtime_ns, named.st_mode,
         )
-        if opened_identity != expected or named_identity != expected:
-            raise RuntimeError(
-                'runtime file changed after preview: ' + relative.as_posix()
+        actual = opened_identity if opened_identity == named_identity else None
+
+        def delete_staged():
+            nonlocal moved
+            os.unlink(staged_name, dir_fd=stage_fd)
+            moved = False
+
+        def recover_staged():
+            nonlocal moved
+            recovered = _recover_posix_stage(
+                stage_fd, parent_fd, staged_name, relative.name,
             )
-        os.unlink(relative.name, dir_fd=parent_fd)
+            moved = False
+            return recovered
+
+        _finish_posix_stage(
+            expected, actual, delete=delete_staged, recover=recover_staged,
+            label=relative.as_posix(),
+        )
+    except BaseException:
+        if moved and stage_fd is not None:
+            try:
+                _recover_posix_stage(stage_fd, parent_fd, staged_name, relative.name)
+                moved = False
+            except OSError:
+                pass
+        raise
     finally:
+        if candidate_fd is not None:
+            os.close(candidate_fd)
+        if stage_fd is not None:
+            os.close(stage_fd)
+        if not moved and 'parent_fd' in locals():
+            try:
+                os.rmdir(stage_name, dir_fd=parent_fd)
+            except OSError:
+                pass
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+
+
+def _after_posix_stage(
+    _parent_fd: int, _stage_fd: int, _original_name: str, _staged_name: str,
+) -> None:
+    """Test seam after the atomic move; production intentionally does nothing."""
+
+
+def _recover_posix_stage(
+    stage_fd: int, parent_fd: int, staged_name: str, original_name: str,
+) -> str:
+    candidates = [
+        original_name,
+        '.' + original_name + '.galaxy-recovered-' + uuid.uuid4().hex,
+    ]
+    for destination in candidates:
+        try:
+            os.link(
+                staged_name, destination,
+                src_dir_fd=stage_fd, dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            continue
+        os.unlink(staged_name, dir_fd=stage_fd)
+        return destination
+    raise FileExistsError('cannot recover staged runtime candidate')
+
+
+def _finish_posix_stage(
+    expected: tuple[int, int, int, int, int],
+    actual: tuple[int, int, int, int, int] | None,
+    *, delete, recover, label: str,
+) -> None:
+    if actual != expected:
+        recovered = recover()
+        raise RuntimeError(
+            'runtime file changed after preview: '
+            + label + '; preserved as ' + recovered
+        )
+    delete()

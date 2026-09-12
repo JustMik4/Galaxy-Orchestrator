@@ -477,14 +477,21 @@ class GalaxyV2CliTests(unittest.TestCase):
         config_path.write_text(json.dumps(config), encoding="utf-8")
         update_declaration_hashes(self.project)
         snapshots = Path(self.temporary.name) / "snapshots.json"
-        snapshots.write_text(json.dumps([{
+        task = {
             "task_id": "T-9",
             "title": "Integrate CLI",
             "status": "complete",
             "revision": 1,
             "source_receipt": "receipt-1",
             "prompt": "must not be exported",
-        }]), encoding="utf-8")
+        }
+        snapshots.write_text(json.dumps({
+            "schema_version": 1,
+            "tasks": [task],
+            "authority": [{
+                "task_id": "T-9", "revision": 1, "source_receipt": "receipt-1",
+            }],
+        }), encoding="utf-8")
 
         result = self.run_cli("vault", "sync", self.project, "--snapshot", snapshots)
         self.assertEqual(result.returncode, 0, result.stderr)

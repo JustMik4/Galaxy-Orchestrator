@@ -22,10 +22,34 @@ if not __package__:
     __package__ = "lib"
 
 
-def _load_snapshots(paths: list[str]) -> list[dict]:
-    snapshots = []
+def _load_snapshots(paths: list[str], *, require_authority: bool = False):
+    if require_authority and not paths:
+        raise ValueError("vault sync requires an authoritative snapshot envelope")
+    decoded_values = []
     for value in paths:
-        decoded = json.loads(Path(value).read_text(encoding="utf-8"))
+        decoded_values.append(json.loads(Path(value).read_text(encoding="utf-8")))
+    envelopes = [
+        decoded for decoded in decoded_values
+        if isinstance(decoded, dict)
+        and set(decoded) == {"schema_version", "tasks", "authority"}
+    ]
+    if envelopes:
+        if len(envelopes) != len(decoded_values):
+            raise ValueError("cannot mix authoritative envelopes and legacy snapshots")
+        tasks = []
+        authority = []
+        for decoded in envelopes:
+            if decoded.get("schema_version") != 1:
+                raise ValueError("unsupported authoritative snapshot schema_version")
+            if not isinstance(decoded.get("tasks"), list) or not isinstance(decoded.get("authority"), list):
+                raise ValueError("authoritative snapshot tasks and authority must be arrays")
+            tasks.extend(decoded["tasks"])
+            authority.extend(decoded["authority"])
+        return {"schema_version": 1, "tasks": tasks, "authority": authority}
+    if require_authority:
+        raise ValueError("vault sync requires a versioned authoritative snapshot envelope")
+    snapshots = []
+    for decoded in decoded_values:
         items = decoded if isinstance(decoded, list) else [decoded]
         if any(not isinstance(item, dict) for item in items):
             raise ValueError("snapshot file must contain an object or array of objects")
@@ -248,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
             from .project import load_project
             from .vault import sync
             project = load_project(options.project)
-            snapshots = _load_snapshots(options.snapshot)
+            snapshots = _load_snapshots(options.snapshot, require_authority=True)
             payload = {
                 "command": "vault sync",
                 **sync(project.root, project.config.vault, snapshots,

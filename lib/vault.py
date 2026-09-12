@@ -22,6 +22,18 @@ _FIELDS = ('task_id', 'title', 'status', 'owner', 'revision', 'source_receipt', 
 _TASK_ID = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$')
 _DEFAULT_INCLUDE = ('tasks', 'milestones', 'summaries')
 _DEFAULT_EXCLUDE = ('prompts', 'responses', 'telemetry', 'secrets')
+_REQUIRED_FIELDS = frozenset(
+    {'task_id', 'revision', 'source_receipt', 'status', 'owner', 'updated_at'}
+)
+_EXCLUDE_ALIASES = {
+    **{name: name for name in _SENSITIVE | set(_FIELDS)},
+    **{
+        name + 's': name
+        for name in _SENSITIVE | set(_FIELDS)
+        if not name.endswith('s')
+    },
+    'dependency': 'dependencies',
+}
 
 
 def _reject_links(path):
@@ -117,16 +129,25 @@ def _policy(config):
         or any(not isinstance(item, str) or not item.strip() for item in include)
     ):
         raise VaultError('vault include must be an array of names')
+    normalized_exclude = _normalize_exclude(exclude)
+    return frozenset(item.casefold() for item in include), normalized_exclude
+
+
+def _normalize_exclude(exclude):
     if (
-        not isinstance(exclude, (list, tuple))
+        not isinstance(exclude, (list, tuple, set, frozenset))
         or any(not isinstance(item, str) or not item.strip() for item in exclude)
     ):
         raise VaultError('vault exclude must be an array of names')
-    normalized_exclude = frozenset(item.casefold() for item in exclude)
-    required = {'task_id', 'revision', 'source_receipt', 'status', 'owner', 'updated_at'}
-    if required.intersection(normalized_exclude):
+    try:
+        normalized_exclude = frozenset(
+            _EXCLUDE_ALIASES[item.casefold()] for item in exclude
+        )
+    except KeyError as exc:
+        raise VaultError('unsupported vault exclude field: ' + str(exc.args[0])) from exc
+    if _REQUIRED_FIELDS.intersection(normalized_exclude):
         raise VaultError('required vault fields cannot be excluded')
-    return frozenset(item.casefold() for item in include), normalized_exclude
+    return normalized_exclude
 
 
 def _vault_path(vault, relative):
@@ -187,10 +208,10 @@ def render_task_note(snapshot, *, exclude=()):
         raise VaultError('revision must be a non-negative integer')
     if not isinstance(receipt, str) or not receipt.strip():
         raise VaultError('source_receipt must be a non-empty string')
-    excluded = {str(item).casefold().rstrip('s') for item in exclude}
+    excluded = _normalize_exclude(exclude)
     fields = {}
     for key in _FIELDS:
-        if key.casefold().rstrip('s') in excluded:
+        if key.casefold() in excluded:
             continue
         if key in snapshot and snapshot[key] is not None:
             value = snapshot[key]
@@ -235,10 +256,71 @@ def _desired(snapshot_list, config):
     return files
 
 
+def _authority_state(value, label):
+    if not isinstance(value, dict) or set(value) != {
+        'task_id', 'revision', 'source_receipt'
+    }:
+        raise VaultError(label + ' must contain exact task_id, revision, and source_receipt fields')
+    task_id = value.get('task_id')
+    revision = value.get('revision')
+    receipt = value.get('source_receipt')
+    if not isinstance(task_id, str) or not _TASK_ID.fullmatch(task_id):
+        raise VaultError(label + ' task_id must be a safe identifier')
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise VaultError(label + ' revision must be a non-negative integer')
+    if not isinstance(receipt, str) or not receipt.strip():
+        raise VaultError(label + ' source_receipt must be non-empty')
+    return task_id, revision, receipt
+
+
+def _snapshot_input(value, *, require_authority):
+    if isinstance(value, (list, tuple)):
+        if require_authority:
+            raise VaultError('sync requires a versioned authoritative snapshot envelope')
+        return list(value), None
+    if not isinstance(value, dict) or set(value) != {
+        'schema_version', 'tasks', 'authority'
+    }:
+        raise VaultError('snapshot envelope must contain schema_version, tasks, and authority')
+    if value.get('schema_version') != 1:
+        raise VaultError('unsupported authoritative snapshot schema_version')
+    tasks = value.get('tasks')
+    authority = value.get('authority')
+    if not isinstance(tasks, list) or not isinstance(authority, list):
+        raise VaultError('authoritative snapshot tasks and authority must be arrays')
+    authority_by_id = {}
+    for item in authority:
+        state = _authority_state(item, 'authoritative receipt')
+        if state[0] in authority_by_id:
+            raise VaultError('duplicate authoritative receipt: ' + state[0])
+        authority_by_id[state[0]] = state
+    task_ids = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise VaultError('task snapshot must be an object')
+        task_id = task.get('task_id', task.get('id'))
+        state = _authority_state({
+            'task_id': task_id,
+            'revision': task.get('revision'),
+            'source_receipt': task.get('source_receipt'),
+        }, 'task snapshot authority')
+        if task_id in task_ids:
+            raise VaultError('duplicate task snapshot: ' + str(task_id))
+        task_ids.add(task_id)
+        if authority_by_id.get(task_id) != state:
+            raise VaultError('task snapshot does not match authoritative receipt: ' + str(task_id))
+    if task_ids != set(authority_by_id):
+        raise VaultError('authoritative receipt set must exactly match task snapshots')
+    return tasks, authority_by_id
+
+
 def _note_state(data):
     try:
         text = data.decode('utf-8')
     except UnicodeError:
+        return None
+    text = text.replace('\r\n', '\n')
+    if '\r' in text:
         return None
     if not text.startswith('---\n'):
         return None
@@ -276,8 +358,10 @@ def _validate_monotonic(vault, files):
         _reject_links(target)
         current = _note_state(target.read_bytes())
         desired = _note_state(incoming)
-        if current is None or desired is None:
-            continue
+        if current is None:
+            raise VaultError('existing vault task frontmatter is malformed: ' + relative)
+        if desired is None:
+            raise VaultError('generated vault task frontmatter is malformed: ' + relative)
         current_id, current_revision, current_receipt = current
         desired_id, desired_revision, desired_receipt = desired
         if current_id != desired_id:
@@ -292,8 +376,10 @@ def status(project, config, snapshots=()):
     enabled, vault, mode = _config(project, config)
     if not enabled:
         return {'enabled': False, 'path': None, 'drift': [], 'expected': 0}
-    expected = _desired(snapshots, config)
+    snapshot_list, _authority = _snapshot_input(snapshots, require_authority=False)
+    expected = _desired(snapshot_list, config)
     _validate_tree(vault)
+    _validate_monotonic(vault, expected)
     drift = []
     for relative, data in expected.items():
         path = _vault_path(vault, relative)
@@ -325,7 +411,8 @@ def sync(project, config, snapshots, *, check=False, force=False):
     enabled, vault, mode = _config(project, config)
     if not enabled:
         return {'enabled': False, 'written': [], 'drift': [], 'backup': None}
-    files = _desired(snapshots, config)
+    snapshot_list, _authority = _snapshot_input(snapshots, require_authority=True)
+    files = _desired(snapshot_list, config)
     _validate_tree(vault)
     _validate_monotonic(vault, files)
     drift = []
@@ -339,6 +426,8 @@ def sync(project, config, snapshots, *, check=False, force=False):
         for path in tasks.glob('*.md'):
             _reject_links(path)
             relative = path.relative_to(vault).as_posix()
+            if '.conflict-' not in path.name and _note_state(path.read_bytes()) is None:
+                raise VaultError('existing vault task frontmatter is malformed: ' + relative)
             if relative not in files and '.conflict-' not in path.name:
                 stale.append(relative)
         stale.sort()

@@ -24,6 +24,16 @@ class VaultTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def envelope(self, snapshots):
+        return {
+            'schema_version': 1,
+            'tasks': list(snapshots),
+            'authority': [
+                {key: snapshot[key] for key in ('task_id', 'revision', 'source_receipt')}
+                for snapshot in snapshots
+            ],
+        }
+
     def test_internal_path_is_project_relative_and_safe(self):
         self.assertEqual(validate_internal_vault_path(self.project, '.galaxy/vault'),
                          self.project / '.galaxy' / 'vault')
@@ -57,7 +67,7 @@ class VaultTests(unittest.TestCase):
     def test_include_and_exclude_policy_is_applied_before_rendering(self):
         without_tasks = sync(self.project, {
             'enabled': True, 'path': '.galaxy/vault', 'include': ['summaries'],
-        }, [self.snapshot])
+        }, self.envelope([self.snapshot]))
         self.assertNotIn('tasks/T-1.md', without_tasks['written'])
         self.assertFalse((self.project / '.galaxy/vault/tasks/T-1.md').exists())
 
@@ -66,7 +76,7 @@ class VaultTests(unittest.TestCase):
         result = sync(other, {
             'enabled': True, 'path': '.galaxy/vault', 'include': ['tasks'],
             'exclude': ['dependencies', 'risk'],
-        }, [{**self.snapshot, 'dependencies': ['T-0'], 'risk': 'critical'}])
+        }, self.envelope([{**self.snapshot, 'dependencies': ['T-0'], 'risk': 'critical'}]))
         note = other / '.galaxy/vault/tasks/T-1.md'
         self.assertIn('tasks/T-1.md', result['written'])
         self.assertNotIn('dependencies:', note.read_text(encoding='utf-8'))
@@ -77,10 +87,10 @@ class VaultTests(unittest.TestCase):
             sync(self.project, {
                 'enabled': True, 'path': '.galaxy/vault',
                 'exclude': ['source_receipt'],
-            }, [self.snapshot])
+            }, self.envelope([self.snapshot]))
 
     def test_sync_creates_obsidian_marker_and_notes(self):
-        result = sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot])
+        result = sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, self.envelope([self.snapshot]))
         vault = self.project / '.galaxy' / 'vault'
         self.assertEqual(result['written'], ['.obsidian/app.json', 'tasks/T-1.md'])
         self.assertTrue((vault / '.obsidian/app.json').is_file())
@@ -89,35 +99,35 @@ class VaultTests(unittest.TestCase):
 
     def test_check_and_disabled_do_not_write(self):
         self.assertEqual(sync(self.project, {'enabled': False}, [self.snapshot])['written'], [])
-        result = sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot], check=True)
+        result = sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, self.envelope([self.snapshot]), check=True)
         self.assertEqual(result['written'], [])
         self.assertFalse((self.project / '.galaxy').exists())
 
     def test_drift_refuses_and_force_backs_up(self):
         config = {'enabled': True, 'path': '.galaxy/vault'}
-        sync(self.project, config, [self.snapshot])
+        sync(self.project, config, self.envelope([self.snapshot]))
         note = self.project / '.galaxy/vault/tasks/T-1.md'
-        note.write_text('human edit', encoding='utf-8')
+        note.write_text(note.read_text(encoding='utf-8') + '\nHuman edit.\n', encoding='utf-8')
         with self.assertRaises(VaultError):
-            sync(self.project, config, [self.snapshot])
-        result = sync(self.project, config, [self.snapshot], force=True)
+            sync(self.project, config, self.envelope([self.snapshot]))
+        result = sync(self.project, config, self.envelope([self.snapshot]), force=True)
         self.assertTrue(result['backup'])
         self.assertEqual(note.read_text(encoding='utf-8'), render_task_note(self.snapshot))
         self.assertTrue(Path(result['backup'], 'tasks/T-1.md').is_file())
 
     def test_stale_projection_requires_force_and_is_backed_up(self):
         config = {'enabled': True, 'path': '.galaxy/vault'}
-        sync(self.project, config, [self.snapshot])
+        sync(self.project, config, self.envelope([self.snapshot]))
         with self.assertRaises(VaultError):
-            sync(self.project, config, [])
-        result = sync(self.project, config, [], force=True)
+            sync(self.project, config, self.envelope([]))
+        result = sync(self.project, config, self.envelope([]), force=True)
         self.assertTrue(Path(result['backup'], 'tasks/T-1.md').is_file())
         self.assertFalse((self.project / '.galaxy/vault/tasks/T-1.md').exists())
 
     def test_force_never_allows_revision_downgrade_or_equal_receipt_mismatch(self):
         config = {'enabled': True, 'path': '.galaxy/vault'}
         current = {**self.snapshot, 'revision': 7, 'source_receipt': 'receipt-7'}
-        sync(self.project, config, [current])
+        sync(self.project, config, self.envelope([current]))
         note = self.project / '.galaxy/vault/tasks/T-1.md'
         before = note.read_bytes()
         for stale in (
@@ -126,14 +136,14 @@ class VaultTests(unittest.TestCase):
         ):
             with self.subTest(stale=stale):
                 with self.assertRaisesRegex(VaultError, 'revision|receipt'):
-                    sync(self.project, config, [stale], force=True)
+                    sync(self.project, config, self.envelope([stale]), force=True)
                 self.assertEqual(note.read_bytes(), before)
 
     def test_sync_rejects_missing_authoritative_receipt(self):
         with self.assertRaisesRegex(VaultError, 'source_receipt'):
-            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, self.envelope([
                 {**self.snapshot, 'source_receipt': ''},
-            ])
+            ]))
 
     @unittest.skipUnless(os.name == 'nt', 'junction regression is Windows-specific')
     def test_descendant_tasks_junction_cannot_write_outside_vault(self):
@@ -150,7 +160,7 @@ class VaultTests(unittest.TestCase):
         self.addCleanup(lambda: junction.rmdir() if junction.exists() else None)
 
         with self.assertRaisesRegex(VaultError, 'symlink/reparse'):
-            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot], force=True)
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, self.envelope([self.snapshot]), force=True)
 
         self.assertFalse((outside / 'T-1.md').exists())
 
@@ -173,28 +183,28 @@ class VaultTests(unittest.TestCase):
 
     def test_project_owned_conflict_preserves_human_note_and_incoming_snapshot(self):
         config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'project-owned'}
-        sync(self.project, config, [self.snapshot])
+        sync(self.project, config, self.envelope([self.snapshot]))
         note = self.project / '.galaxy/vault/tasks/T-1.md'
         human = note.read_text(encoding='utf-8') + '\nHuman decision: keep this paragraph.\n'
         note.write_text(human, encoding='utf-8')
         incoming = {**self.snapshot, 'revision': 4, 'source_receipt': 'r-4'}
 
-        result = sync(self.project, config, [incoming], force=True)
+        result = sync(self.project, config, self.envelope([incoming]), force=True)
 
         self.assertEqual(note.read_text(encoding='utf-8'), human)
         self.assertEqual(len(result['conflicts']), 1)
         conflict = self.project / '.galaxy/vault' / result['conflicts'][0]
         self.assertTrue(conflict.is_file())
         self.assertEqual(conflict.read_text(encoding='utf-8'), render_task_note(incoming))
-        again = sync(self.project, config, [incoming])
+        again = sync(self.project, config, self.envelope([incoming]))
         self.assertEqual(again['conflicts'], result['conflicts'])
         self.assertEqual(note.read_text(encoding='utf-8'), human)
 
     def test_project_owned_stale_note_is_never_deleted(self):
         config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'project-owned'}
-        sync(self.project, config, [self.snapshot])
+        sync(self.project, config, self.envelope([self.snapshot]))
         note = self.project / '.galaxy/vault/tasks/T-1.md'
-        result = sync(self.project, config, [], force=True)
+        result = sync(self.project, config, self.envelope([]), force=True)
         self.assertTrue(note.is_file())
         self.assertIn('tasks/T-1.md', result['drift'])
 
@@ -207,7 +217,7 @@ class VaultTests(unittest.TestCase):
             '[vault]\nexternal = true\npath = ' + quoted + '\n', encoding='utf-8'
         )
         config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'projection'}
-        result = sync(self.project, config, [self.snapshot])
+        result = sync(self.project, config, self.envelope([self.snapshot]))
         self.assertEqual(Path(result['path']), external)
         self.assertTrue((external / 'tasks/T-1.md').is_file())
 
@@ -224,7 +234,7 @@ class VaultTests(unittest.TestCase):
         config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'projection'}
         for operation in (
             lambda: status(self.project, config, [self.snapshot]),
-            lambda: sync(self.project, config, [self.snapshot], force=True),
+            lambda: sync(self.project, config, self.envelope([self.snapshot]), force=True),
         ):
             with self.subTest(operation=operation.__code__.co_firstlineno):
                 with self.assertRaisesRegex(
@@ -241,6 +251,44 @@ class VaultTests(unittest.TestCase):
 
     def test_external_override_cannot_be_child_of_project(self):
         self._assert_external_boundary_rejected(self.project / 'personal-vault')
+
+    def test_sync_rejects_legacy_list_without_explicit_authority(self):
+        with self.assertRaisesRegex(VaultError, 'authoritative'):
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, [self.snapshot])
+
+    def test_invented_higher_revision_receipt_fails_authority_match(self):
+        invented = {**self.snapshot, 'revision': 4, 'source_receipt': 'invented-r-4'}
+        envelope = self.envelope([self.snapshot])
+        envelope['tasks'] = [invented]
+        with self.assertRaisesRegex(VaultError, 'authoritative'):
+            sync(self.project, {'enabled': True, 'path': '.galaxy/vault'}, envelope, force=True)
+
+    def test_crlf_note_still_blocks_revision_downgrade(self):
+        config = {'enabled': True, 'path': '.galaxy/vault'}
+        current = {**self.snapshot, 'revision': 7, 'source_receipt': 'receipt-7'}
+        sync(self.project, config, self.envelope([current]))
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        note.write_bytes(note.read_bytes().replace(b'\n', b'\r\n'))
+        stale = {**self.snapshot, 'revision': 6, 'source_receipt': 'receipt-6'}
+        with self.assertRaisesRegex(VaultError, 'revision'):
+            sync(self.project, config, self.envelope([stale]), force=True)
+
+    def test_malformed_existing_frontmatter_cannot_be_forced_over(self):
+        config = {'enabled': True, 'path': '.galaxy/vault'}
+        sync(self.project, config, self.envelope([self.snapshot]))
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        note.write_text('---\nrevision: broken\n---\n', encoding='utf-8')
+        with self.assertRaisesRegex(VaultError, 'malformed'):
+            sync(self.project, config, self.envelope([self.snapshot]), force=True)
+        self.assertIn('revision: broken', note.read_text(encoding='utf-8'))
+
+    def test_plural_authority_excludes_are_rejected(self):
+        for field in ('revisions', 'source_receipts'):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(VaultError, 'required vault fields'):
+                    sync(self.project, {
+                        'enabled': True, 'path': '.galaxy/vault', 'exclude': [field],
+                    }, self.envelope([self.snapshot]))
 
 
 if __name__ == '__main__':

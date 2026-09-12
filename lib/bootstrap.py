@@ -34,6 +34,7 @@ class BootstrapPlan:
     unchanged: tuple[str, ...]
     drift: tuple[str, ...]
     previous: tuple[tuple[str, bytes], ...]
+    removal_previous: tuple[tuple[str, bytes], ...]
     pollution: Any
     vault: str
     state_snapshot: bytes | None
@@ -199,7 +200,7 @@ def _stale_skills(
     project: GalaxyProject,
     selected: frozenset[str],
     recorded: dict[str, str] | None,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, bytes], ...]:
     manifest = project.root / ".codex/galaxy-specialists.json"
     if not manifest.is_file():
         return ()
@@ -221,7 +222,7 @@ def _stale_skills(
             content = target.read_bytes()
             if not recorded or recorded.get(relative) != _digest(content):
                 raise BootstrapError(f"stale specialist contains non-generated content: {relative}")
-            stale.append(relative)
+            stale.append((relative, content))
     return tuple(stale)
 
 
@@ -298,7 +299,8 @@ def bootstrap_plan(
     except KeyError as exc:
         raise BootstrapError(str(exc)) from exc
     artifacts = list(_safe_artifacts(_renderer(renderer).render(hot_set)))
-    remove = _stale_skills(project, frozenset(hot_set.names), recorded)
+    removal_previous = _stale_skills(project, frozenset(hot_set.names), recorded)
+    remove = tuple(relative for relative, _content in removal_previous)
     exclude = _exclude_artifact(project)
     if exclude:
         artifacts.append(exclude)
@@ -333,7 +335,7 @@ def bootstrap_plan(
     ))
     return BootstrapPlan(
         project, tuple(artifacts), tuple(create), tuple(update), remove, tuple(unchanged), tuple(drift),
-        tuple(previous),
+        tuple(previous), removal_previous,
         project_pollution(project.root), _vault_state(project),
         state_snapshot, state_hashes,
     )
@@ -385,6 +387,7 @@ def bootstrap(
         raise BootstrapError("bootstrap state changed concurrently")
     expected = dict(plan.artifacts)
     previous = dict(plan.previous)
+    removal_previous = dict(plan.removal_previous)
     for relative in plan.create + plan.update:
         if not declarations_unchanged(plan.project):
             raise BootstrapError("project-owned declarations changed during bootstrap; refusing partial overwrite")
@@ -402,7 +405,10 @@ def bootstrap(
         _atomic_write(target, expected[relative])
     for relative in plan.remove:
         target = _assert_local_target(plan.project, relative)
-        if not target.is_file() or not _is_galaxy_generated(relative, target.read_bytes()):
+        if (
+            not target.is_file()
+            or target.read_bytes() != removal_previous.get(relative)
+        ):
             raise BootstrapError(f"stale generated specialist changed concurrently: {relative}")
         target.unlink()
         try:

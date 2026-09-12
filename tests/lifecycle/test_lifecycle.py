@@ -4,7 +4,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import lib.lifecycle.runtime as runtime_module
 from lib.lifecycle import (
     apply_branch_cleanup, apply_runtime_cleanup, branch_cleanup_plan,
     plan_runtime_cleanup, plan_worktree_cleanup,
@@ -144,6 +146,41 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "changed after preview"):
             apply_runtime_cleanup(plan, apply=True)
         self.assertEqual(target.read_text(), "other")
+
+    def test_posix_staged_mismatch_recovers_instead_of_deleting(self):
+        deleted = []
+        recovered = []
+        expected = (1, 2, 3, 4, 5)
+        replacement = (1, 9, 3, 4, 5)
+
+        with self.assertRaisesRegex(RuntimeError, "changed after preview"):
+            runtime_module._finish_posix_stage(
+                expected, replacement,
+                delete=lambda: deleted.append(True),
+                recover=lambda: recovered.append(True) or "recovered.tmp",
+                label=".galaxy/runtime/old.tmp",
+            )
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(recovered, [True])
+
+    @unittest.skipIf(os.name == "nt", "POSIX dir_fd race regression")
+    def test_posix_replacement_created_after_stage_is_never_deleted(self):
+        runtime = self.repo / ".galaxy/runtime"
+        runtime.mkdir(parents=True)
+        target = runtime / "old.tmp"
+        target.write_text("previewed")
+        old_stamp = time.time() - 10 * 86400
+        os.utime(target, (old_stamp, old_stamp))
+        plan = plan_runtime_cleanup(self.repo, retention_days=3, now=time.time())
+
+        def replace_original(*_args):
+            target.write_text("replacement")
+
+        with patch.object(runtime_module, "_after_posix_stage", side_effect=replace_original):
+            apply_runtime_cleanup(plan, apply=True)
+
+        self.assertEqual(target.read_text(), "replacement")
 
     @unittest.skipUnless(os.name == "nt", "junction regression is Windows-specific")
     def test_runtime_junction_to_product_source_is_rejected_without_deletion(self):
