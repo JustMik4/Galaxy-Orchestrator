@@ -30,12 +30,12 @@ _FORBIDDEN = frozenset(
     }
 )
 _BODY_AUTHORITY = re.compile(
-    r"(?i)^\s*(?:[-*]\s*)?(?:(?:set|use|require|override|grant|allow|deny|choose|change|"
+    r"(?i)(?:^|[.!?;]\s*|\b)(?:[-*]\s*)?(?:(?:set|use|require|override|grant|allow|deny|choose|change|"
     r"configure|must\s+use|must\s+set)\s+(?:the\s+)?)?(?:model|reasoning(?:\s+effort)?|"
     r"effort|sandbox(?:\s+mode)?|scope|credentials?|network(?:\s+permissions?)?|"
     r"delegation|integration(?:\s+authority)?|quota(?:\s+thresholds?)?|"
     r"browser(?:\s+approval)?|ownership|filesystem\s+permissions?|branch\s+protection)"
-    r"(?:\s*[:=]\s*|\s+(?:to|is|must|should|may|can)\b)"
+    r"(?:\s*[:=]\s*|\s+(?:to|is|must|should|may|can|without)\b)"
 )
 
 

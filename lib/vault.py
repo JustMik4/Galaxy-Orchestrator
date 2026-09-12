@@ -1,9 +1,12 @@
 """Deterministic, privacy-preserving Obsidian projection for Galaxy tasks."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
+import tomllib
+import re
 
 
 class VaultError(ValueError):
@@ -15,6 +18,7 @@ _SENSITIVE = {'prompt', 'prompts', 'response', 'responses', 'telemetry', 'secret
               'account_id', 'github_login', 'email'}
 _FIELDS = ('task_id', 'title', 'status', 'owner', 'revision', 'source_receipt', 'updated_at',
            'dependencies', 'risk', 'specialist')
+_TASK_ID = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$')
 
 
 def _reject_links(path):
@@ -31,11 +35,11 @@ def _reject_links(path):
 
 def validate_internal_vault_path(project, configured):
     """Return a safe vault path when *configured* is a strict project-relative path."""
-    root = Path(project).resolve()
+    root = Path(os.path.abspath(project))
     value = Path(configured)
     if value.is_absolute() or not str(configured).strip() or any(part == '..' for part in value.parts):
         raise VaultError('internal vault path must be project-relative and contain no traversal')
-    target = (root / value).resolve(strict=False)
+    target = Path(os.path.abspath(root / value))
     try:
         target.relative_to(root)
     except ValueError:
@@ -45,20 +49,43 @@ def validate_internal_vault_path(project, configured):
     return target
 
 
+def _operator_vault_override(project):
+    """Read only the explicit operator-local external-vault override."""
+    path = Path(os.path.abspath(project)) / '.galaxy' / 'local' / 'operator.toml'
+    _reject_links(path)
+    if not path.is_file():
+        return {}
+    try:
+        decoded = tomllib.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise VaultError('invalid operator-local vault configuration: ' + str(exc)) from exc
+    vault = decoded.get('vault', {})
+    if not isinstance(vault, dict) or set(vault).difference({'path', 'external'}):
+        raise VaultError('operator-local vault override accepts only path and external')
+    if not vault:
+        return {}
+    if vault.get('external') is not True or not isinstance(vault.get('path'), str):
+        raise VaultError('operator-local vault path requires external = true and an absolute path')
+    if not Path(vault['path']).is_absolute():
+        raise VaultError('operator-local external vault path must be absolute')
+    return {'path': vault['path'], 'external': True}
+
+
 def _config(project, config):
     config = dict(config or {})
     if not config.get('enabled', False):
-        return False, None
+        return False, None, config.get('mode', 'projection')
+    config.update(_operator_vault_override(project))
     path = config.get('path', '.galaxy/vault')
     if config.get('external', False) or Path(path).is_absolute():
-        target = Path(path).expanduser().resolve(strict=False)
+        target = Path(os.path.abspath(Path(path).expanduser()))
         _reject_links(target)
     else:
         target = validate_internal_vault_path(project, path)
     mode = config.get('mode', 'projection')
     if mode not in ('projection', 'project-owned'):
         raise VaultError('invalid vault mode')
-    return True, target
+    return True, target, mode
 
 
 def _scalar(value):
@@ -74,7 +101,7 @@ def render_task_note(snapshot):
     if not isinstance(snapshot, dict):
         raise VaultError('task snapshot must be an object')
     task_id = snapshot.get('task_id', snapshot.get('id'))
-    if not isinstance(task_id, str) or not task_id or '/' in task_id or '\\' in task_id or task_id in ('.', '..'):
+    if not isinstance(task_id, str) or not _TASK_ID.fullmatch(task_id):
         raise VaultError('task_id must be a safe non-empty identifier')
     fields = {}
     for key in _FIELDS:
@@ -88,9 +115,12 @@ def render_task_note(snapshot):
                 continue
             fields[key] = value
     fields['task_id'] = task_id
+    fields['galaxy_schema'] = 1
     fields.setdefault('revision', 0)
     fields.setdefault('source_receipt', '')
     fields.setdefault('updated_at', '')
+    fields.setdefault('status', '')
+    fields.setdefault('owner', '')
     lines = ['---']
     for key in sorted(fields):
         lines.append(f'{key}: {_scalar(fields[key])}')
@@ -109,7 +139,7 @@ def _desired(snapshot_list):
 
 
 def status(project, config, snapshots=()):
-    enabled, vault = _config(project, config)
+    enabled, vault, mode = _config(project, config)
     if not enabled:
         return {'enabled': False, 'path': None, 'drift': [], 'expected': 0}
     expected = _desired(snapshots)
@@ -122,9 +152,10 @@ def status(project, config, snapshots=()):
     if tasks.is_dir():
         for path in tasks.glob('*.md'):
             relative = path.relative_to(vault).as_posix()
-            if relative not in expected:
+            if relative not in expected and '.conflict-' not in path.name:
                 drift.append(relative)
-    return {'enabled': True, 'path': str(vault), 'drift': sorted(drift), 'expected': len(expected)}
+    return {'enabled': True, 'path': str(vault), 'mode': mode,
+            'drift': sorted(drift), 'expected': len(expected)}
 
 
 def _backup_path(vault, drift):
@@ -137,7 +168,7 @@ def _backup_path(vault, drift):
 
 
 def sync(project, config, snapshots, *, check=False, force=False):
-    enabled, vault = _config(project, config)
+    enabled, vault, mode = _config(project, config)
     if not enabled:
         return {'enabled': False, 'written': [], 'drift': [], 'backup': None}
     files = _desired(snapshots)
@@ -146,10 +177,35 @@ def sync(project, config, snapshots, *, check=False, force=False):
     tasks = vault / 'tasks'
     if tasks.is_dir():
         stale = sorted(path.relative_to(vault).as_posix() for path in tasks.glob('*.md')
-                       if path.relative_to(vault).as_posix() not in files)
+                       if path.relative_to(vault).as_posix() not in files
+                       and '.conflict-' not in path.name)
         drift.extend(stale)
     if check:
-        return {'enabled': True, 'written': [], 'drift': sorted(drift), 'backup': None, 'check': True}
+        return {'enabled': True, 'path': str(vault), 'mode': mode, 'written': [],
+                'drift': sorted(drift), 'conflicts': [], 'backup': None, 'check': True}
+    if mode == 'project-owned':
+        vault.mkdir(parents=True, exist_ok=True)
+        written = []
+        conflicts = []
+        for relative, data in files.items():
+            target = vault / relative
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                written.append(relative)
+            elif target.is_file() and target.read_bytes() != data and relative.startswith('tasks/'):
+                digest = hashlib.sha256(data).hexdigest()[:12]
+                conflict = target.with_name(target.stem + '.conflict-' + digest + target.suffix)
+                conflict_relative = conflict.relative_to(vault).as_posix()
+                if not conflict.exists():
+                    conflict.write_bytes(data)
+                    written.append(conflict_relative)
+                elif not conflict.is_file() or conflict.read_bytes() != data:
+                    raise VaultError('vault conflict artifact has unexpected content: ' + conflict_relative)
+                conflicts.append(conflict_relative)
+        return {'enabled': True, 'path': str(vault), 'mode': mode,
+                'written': sorted(written), 'drift': sorted(drift),
+                'conflicts': sorted(conflicts), 'backup': None}
     if drift and not force and vault.exists():
         raise VaultError('vault drift detected; use force only after reviewing: ' + ', '.join(sorted(drift)))
     backup = None
@@ -164,4 +220,6 @@ def sync(project, config, snapshots, *, check=False, force=False):
         target.write_bytes(data)
     for relative in stale:
         (vault / relative).unlink()
-    return {'enabled': True, 'written': sorted(drift), 'drift': sorted(drift), 'backup': str(backup) if backup else None}
+    return {'enabled': True, 'path': str(vault), 'mode': mode,
+            'written': sorted(drift), 'drift': sorted(drift), 'conflicts': [],
+            'backup': str(backup) if backup else None}

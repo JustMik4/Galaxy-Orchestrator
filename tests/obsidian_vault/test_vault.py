@@ -38,6 +38,9 @@ class VaultTests(unittest.TestCase):
         self.assertIn('task_id: "T-1"', first)
         self.assertIn('source_receipt: "r-3"', first)
         self.assertIn('revision: 3', first)
+        self.assertIn('galaxy_schema: 1', first)
+        self.assertIn('status: "claimed"', first)
+        self.assertIn('owner: "alice"', first)
         for word in ('do not export', 'tokens', 'account_id', 'secret'):
             self.assertNotIn(word, first)
 
@@ -75,6 +78,46 @@ class VaultTests(unittest.TestCase):
         result = sync(self.project, config, [], force=True)
         self.assertTrue(Path(result['backup'], 'tasks/T-1.md').is_file())
         self.assertFalse((self.project / '.galaxy/vault/tasks/T-1.md').exists())
+
+    def test_project_owned_conflict_preserves_human_note_and_incoming_snapshot(self):
+        config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'project-owned'}
+        sync(self.project, config, [self.snapshot])
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        human = note.read_text(encoding='utf-8') + '\nHuman decision: keep this paragraph.\n'
+        note.write_text(human, encoding='utf-8')
+        incoming = {**self.snapshot, 'revision': 4, 'source_receipt': 'r-4'}
+
+        result = sync(self.project, config, [incoming], force=True)
+
+        self.assertEqual(note.read_text(encoding='utf-8'), human)
+        self.assertEqual(len(result['conflicts']), 1)
+        conflict = self.project / '.galaxy/vault' / result['conflicts'][0]
+        self.assertTrue(conflict.is_file())
+        self.assertEqual(conflict.read_text(encoding='utf-8'), render_task_note(incoming))
+        again = sync(self.project, config, [incoming])
+        self.assertEqual(again['conflicts'], result['conflicts'])
+        self.assertEqual(note.read_text(encoding='utf-8'), human)
+
+    def test_project_owned_stale_note_is_never_deleted(self):
+        config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'project-owned'}
+        sync(self.project, config, [self.snapshot])
+        note = self.project / '.galaxy/vault/tasks/T-1.md'
+        result = sync(self.project, config, [], force=True)
+        self.assertTrue(note.is_file())
+        self.assertIn('tasks/T-1.md', result['drift'])
+
+    def test_operator_local_override_selects_external_vault(self):
+        external = Path(self.tmp.name) / 'personal-vault'
+        local = self.project / '.galaxy/local'
+        local.mkdir(parents=True)
+        quoted = json.dumps(str(external))
+        (local / 'operator.toml').write_text(
+            '[vault]\nexternal = true\npath = ' + quoted + '\n', encoding='utf-8'
+        )
+        config = {'enabled': True, 'path': '.galaxy/vault', 'mode': 'projection'}
+        result = sync(self.project, config, [self.snapshot])
+        self.assertEqual(Path(result['path']), external)
+        self.assertTrue((external / 'tasks/T-1.md').is_file())
 
 
 if __name__ == '__main__':
