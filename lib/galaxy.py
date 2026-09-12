@@ -84,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
             "  migrate PROJECT [--preview | --rollback RECEIPT]\n"
             "  validate PROJECT [--gate]\n"
             "  doctor PROJECT [--json]\n"
+            "  lock sync PROJECT [--check]\n"
             "  specialists list\n"
             "  specialists sync PROJECT [--check]\n"
             "  cleanup PROJECT [--preview | --apply]\n"
@@ -92,6 +93,29 @@ def main(argv: list[str] | None = None) -> int:
             "Legacy policy commands:\n"
             "  decide usage reputation dag gate grant reclaim\n"
         )
+        return 0
+    if arguments and arguments[:2] == ["lock", "sync"]:
+        parser = argparse.ArgumentParser(prog="galaxy lock sync")
+        parser.add_argument("project")
+        parser.add_argument("--check", action="store_true")
+        options = parser.parse_args(arguments[2:])
+        try:
+            from .declaration_lock import sync
+            payload = {
+                "command": "lock sync",
+                **sync(options.project, check=options.check),
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 1 if options.check and payload["stale"] else 0
+        except (OSError, ValueError, KeyError) as exc:
+            print(json.dumps(
+                {"command": "lock sync", "error": str(exc)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ), file=sys.stderr)
+            return 1
+    if arguments in (["lock"], ["lock", "--help"], ["lock", "-h"]):
+        print("usage: galaxy lock sync PROJECT [--check]")
         return 0
     if arguments and arguments[:2] == ["specialists", "sync"]:
         parser = argparse.ArgumentParser(prog="galaxy specialists sync")
