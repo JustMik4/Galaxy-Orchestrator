@@ -33,6 +33,15 @@ class GalaxyV2CliTests(unittest.TestCase):
             check=False,
         )
 
+    def run_lib_cli(self, *arguments):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "lib/galaxy.py"), *map(str, arguments)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def workflow_run_steps(self):
         lines = (ROOT / "template/.github/workflows/galaxy-validate.yml").read_text(
             encoding="utf-8"
@@ -158,6 +167,49 @@ class GalaxyV2CliTests(unittest.TestCase):
         }
         self.assertEqual(before, after)
 
+    def test_bootstrap_check_missing_generated_artifact_exits_one(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        missing = self.project / ".codex/config.toml"
+        missing.unlink()
+
+        result = self.run_cli("bootstrap", self.project, "--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn(".codex/config.toml", payload["create"])
+        self.assertFalse(missing.exists())
+
+    def test_specialists_sync_check_generated_update_exits_one(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        config = self.project / ".codex/config.toml"
+        config.write_text(config.read_text(encoding="utf-8") + "# stale\n", encoding="utf-8")
+
+        result = self.run_cli("specialists", "sync", self.project, "--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn(".codex/config.toml", payload["update"])
+        self.assertTrue(config.read_text(encoding="utf-8").endswith("# stale\n"))
+
+    def test_specialists_sync_check_preserves_planned_removal_and_exits_one(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        project_path = self.project / ".galaxy/project.yml"
+        lock_path = self.project / "galaxy.lock"
+        project = json.loads(project_path.read_text(encoding="utf-8"))
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        project["specialists"]["packs"] = []
+        lock["specialists"]["packs"] = []
+        project_path.write_text(json.dumps(project), encoding="utf-8")
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        stale = self.project / ".codex/skills/core/SKILL.md"
+
+        result = self.run_cli("specialists", "sync", self.project, "--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn(".codex/skills/core/SKILL.md", payload["removed"])
+        self.assertTrue(stale.is_file())
+
     def test_validate_reports_configuration_and_runs_explicit_gate(self):
         install = self.run_cli("install", self.project)
         self.assertEqual(install.returncode, 0, install.stderr)
@@ -209,6 +261,14 @@ class GalaxyV2CliTests(unittest.TestCase):
             for path in self.project.rglob("*") if path.is_file()
         }
         self.assertEqual(before, after)
+
+    def test_lib_galaxy_file_execution_runs_v2_command(self):
+        MigrationFixture(self.project)
+        result = self.run_lib_cli("migrate", self.project, "--preview")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "migrate")
+        self.assertTrue(payload["preview"])
 
     def test_cleanup_preview_reports_targets_without_mutation(self):
         subprocess.run(["git", "init", "-b", "main"], cwd=self.project, check=True, capture_output=True)
@@ -413,6 +473,76 @@ class GalaxyV2CliTests(unittest.TestCase):
             [path.name for path in self.project.iterdir()],
             ["AGENTS.md"],
         )
+
+    def test_v2_install_rollback_never_follows_replaced_symlink(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        exclude = self.project / ".git/info/exclude"
+        original = b"user-local.txt\n"
+        exclude.write_bytes(original)
+        outside_root = Path(self.temporary.name) / "outside"
+        outside_root.mkdir()
+        outside = outside_root / "exclude"
+        outside_bytes = b"external must remain intact\n"
+        outside.write_bytes(outside_bytes)
+        use_junction = os.name == "nt"
+        if use_junction:
+            probe = self.project / "junction-probe"
+            created = subprocess.run([
+                "pwsh", "-NoProfile", "-Command",
+                "New-Item -ItemType Junction -Path $env:GALAXY_LINK "
+                "-Target $env:GALAXY_TARGET | Out-Null",
+            ], env={**os.environ, "GALAXY_LINK": str(probe),
+                    "GALAXY_TARGET": str(outside_root)},
+                text=True, capture_output=True, check=False)
+            if created.returncode:
+                self.skipTest("directory junction creation unavailable")
+            probe.rmdir()
+        else:
+            probe = self.project / "symlink-probe"
+            try:
+                probe.symlink_to(outside)
+                probe.unlink()
+            except OSError:
+                self.skipTest("file symlink creation unavailable")
+
+        real_replace = installer.os.replace
+        attacked = False
+        failed = False
+
+        def late_failure(source, destination):
+            nonlocal attacked, failed
+            target = Path(destination)
+            if target == exclude and not attacked:
+                real_replace(source, destination)
+                target.unlink()
+                if use_junction:
+                    target.parent.rmdir()
+                    created = subprocess.run([
+                        "pwsh", "-NoProfile", "-Command",
+                        "New-Item -ItemType Junction -Path $env:GALAXY_LINK "
+                        "-Target $env:GALAXY_TARGET | Out-Null",
+                    ], env={**os.environ, "GALAXY_LINK": str(target.parent),
+                            "GALAXY_TARGET": str(outside_root)},
+                        text=True, capture_output=True, check=False)
+                    if created.returncode:
+                        raise OSError(created.stderr)
+                else:
+                    target.symlink_to(outside)
+                attacked = True
+                return
+            if attacked and not failed and self.project in target.parents:
+                failed = True
+                raise OSError("simulated late install failure")
+            return real_replace(source, destination)
+
+        with patch.object(installer.os, "replace", side_effect=late_failure):
+            with self.assertRaisesRegex(OSError, "simulated late install failure"):
+                installer.install_v2(ROOT, self.project)
+
+        self.assertEqual(outside.read_bytes(), outside_bytes)
+        self.assertFalse(exclude.is_symlink())
+        self.assertEqual(exclude.read_bytes(), original)
+        self.assertFalse((self.project / "AGENTS.md").exists())
 
     def test_workflow_fetches_and_runs_exact_galaxy_lock_source(self):
         workflow = (ROOT / "template/.github/workflows/galaxy-validate.yml").read_text(

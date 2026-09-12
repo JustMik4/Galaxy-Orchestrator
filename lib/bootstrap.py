@@ -314,7 +314,7 @@ def bootstrap(
         verify_catalog=verify_catalog,
     )
     if check:
-        return BootstrapResult(False, (), plan.create, plan.update, (), plan.unchanged, plan.drift, plan.pollution, plan.vault)
+        return BootstrapResult(False, (), plan.create, plan.update, plan.remove, plan.unchanged, plan.drift, plan.pollution, plan.vault)
     if plan.drift:
         raise BootstrapError("generated artifact drift detected: " + ", ".join(plan.drift))
     if not declarations_unchanged(plan.project):

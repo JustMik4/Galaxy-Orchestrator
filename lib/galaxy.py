@@ -15,6 +15,13 @@ import subprocess
 import sys
 
 
+if not __package__:
+    repository_root = str(Path(__file__).resolve().parents[1])
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    __package__ = "lib"
+
+
 def _load_snapshots(paths: list[str]) -> list[dict]:
     snapshots = []
     for value in paths:
@@ -24,6 +31,10 @@ def _load_snapshots(paths: list[str]) -> list[dict]:
             raise ValueError("snapshot file must contain an object or array of objects")
         snapshots.extend(items)
     return snapshots
+
+
+def _bootstrap_check_failed(result) -> bool:
+    return bool(result.create or result.update or result.removed or result.drift)
 
 try:
     from .legacy import (
@@ -92,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             result = bootstrap(options.project, check=options.check)
             payload = {"command": "specialists sync", **asdict(result)}
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            return 1 if result.drift else 0
+            return 1 if options.check and _bootstrap_check_failed(result) else 0
         except (OSError, ValueError, KeyError) as exc:
             print(json.dumps({"command": "specialists sync", "error": str(exc)}, ensure_ascii=False, sort_keys=True), file=sys.stderr)
             return 1
@@ -266,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             result = bootstrap(options.project, check=options.check)
             payload = {"command": "bootstrap", **asdict(result)}
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            return 1 if result.drift else 0
+            return 1 if options.check and _bootstrap_check_failed(result) else 0
         except (OSError, ValueError, KeyError) as exc:
             print(json.dumps({"command": "bootstrap", "error": str(exc)}, ensure_ascii=False, sort_keys=True), file=sys.stderr)
             return 1

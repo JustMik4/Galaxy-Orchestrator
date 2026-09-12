@@ -31,6 +31,96 @@ def encoded(value):
     return (json.dumps(value, indent=2, ensure_ascii=False)+'\n').encode('utf-8')
 
 
+def _path_info(path):
+    """Return lstat data without ever resolving a missing/link target."""
+    try:
+        return Path(path).lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _is_link_or_reparse(path, info=None):
+    info = info or _path_info(path)
+    if info is None:
+        return False
+    junction = getattr(Path(path), 'is_junction', None)
+    return (
+        stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, 'st_file_attributes', 0)
+                & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0))
+        or bool(junction and junction())
+    )
+
+
+def _unlink_link_only(path, info):
+    """Remove a link/reparse entry itself, never anything below its target."""
+    path = Path(path)
+    if stat.S_ISDIR(info.st_mode):
+        os.rmdir(path)
+    else:
+        path.unlink()
+
+
+def _remove_rollback_links(project, target):
+    """Remove attacker-substituted links on a rollback path without following them."""
+    project, target = Path(project), Path(target)
+    try:
+        relative = target.relative_to(project)
+    except ValueError as exc:
+        raise ValueError('Rollback target escaped project: ' + str(target)) from exc
+    project_info = _path_info(project)
+    if project_info is None or _is_link_or_reparse(project, project_info):
+        raise ValueError('Project root changed during rollback: ' + str(project))
+    current = project
+    for part in relative.parts:
+        current /= part
+        info = _path_info(current)
+        if info is not None and _is_link_or_reparse(current, info):
+            _unlink_link_only(current, info)
+            # Removing an ancestor makes all remaining components absent.
+            break
+
+
+def _rollback_write(project, target, content):
+    """Restore bytes atomically after revalidating the destination path."""
+    project, target = Path(project), Path(target)
+    rollback_temp = project / ('.galaxy-rollback-' + uuid.uuid4().hex + '.tmp')
+    try:
+        safe_path(rollback_temp)
+        with rollback_temp.open('xb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _remove_rollback_links(project, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        safe_path(target.parent)
+        safe_path(target)
+        os.replace(rollback_temp, target)
+    finally:
+        info = _path_info(rollback_temp)
+        if info is not None:
+            if _is_link_or_reparse(rollback_temp, info):
+                _unlink_link_only(rollback_temp, info)
+            elif stat.S_ISREG(info.st_mode):
+                rollback_temp.unlink()
+
+
+def _rollback_remove(project, target):
+    """Remove a newly-created file or substituted link, but never its referent."""
+    project, target = Path(project), Path(target)
+    _remove_rollback_links(project, target)
+    safe_path(target)
+    info = _path_info(target)
+    if info is None:
+        return
+    if _is_link_or_reparse(target, info):
+        _unlink_link_only(target, info)
+    elif stat.S_ISREG(info.st_mode):
+        target.unlink()
+    else:
+        raise ValueError('Rollback expected a file: ' + str(target))
+
+
 V2_TRACKED_FILES = (
     'AGENTS.md',
     '.galaxy/project.yml',
@@ -203,18 +293,33 @@ def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
                 finally:
                     if temporary_target.exists():
                         temporary_target.unlink()
-        except BaseException:
-            for name in written_names:
+        except BaseException as install_error:
+            rollback_errors = []
+            for name in reversed(written_names):
                 content = originals[name]
                 target = project / name
-                if content is None:
-                    if target.is_file():
-                        target.unlink()
-                else:
-                    target.write_bytes(content)
+                try:
+                    if content is None:
+                        _rollback_remove(project, target)
+                    else:
+                        _rollback_write(project, target, content)
+                except BaseException as rollback_error:
+                    rollback_errors.append(name + ': ' + str(rollback_error))
             for directory in reversed(created_dirs):
-                if directory.exists() and not any(directory.iterdir()):
-                    directory.rmdir()
+                try:
+                    _remove_rollback_links(project, directory)
+                    safe_path(directory)
+                    if _path_info(directory) is not None:
+                        directory.rmdir()
+                except BaseException as rollback_error:
+                    rollback_errors.append(
+                        str(directory.relative_to(project)) + ': ' + str(rollback_error)
+                    )
+            if rollback_errors:
+                raise RuntimeError(
+                    'Install failed and rollback could not safely restore all targets: '
+                    + '; '.join(rollback_errors)
+                ) from install_error
             raise
         return result
 
