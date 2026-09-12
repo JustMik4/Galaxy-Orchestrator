@@ -7,9 +7,14 @@ from lib.evidence import ReviewCache, make_review_fingerprint, normalize_relevan
 
 
 class ReviewCacheTests(unittest.TestCase):
+    def fp(self, *args, **kwargs):
+        kwargs.setdefault("policy_revision", "policy-1")
+        kwargs.setdefault("tests_revision", "tests-1")
+        return make_review_fingerprint(*args, **kwargs)
+
     def test_fingerprint_is_deterministic_and_scope_normalized(self):
-        first = make_review_fingerprint("base", "head", 3, "security", ["src/Auth/", "./README.md", "src/auth"])
-        second = make_review_fingerprint("base", "head", "3", "security", ["readme.md", "src/auth/"])
+        first = self.fp("base", "head", 3, "security", ["src/Auth/", "./README.md", "src/auth"])
+        second = self.fp("base", "head", "3", "security", ["readme.md", "src/auth/"])
         self.assertEqual(first.value, second.value)
         self.assertEqual(first.relevant_scope, ("readme.md", "src/auth"))
         self.assertEqual(len(first.value), 64)
@@ -18,11 +23,11 @@ class ReviewCacheTests(unittest.TestCase):
         for value in ("../src", "src//auth", "C:/src", "/src", "src\\auth", "src/*"):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    make_review_fingerprint("base", "head", 1, "quality", [value])
+                    self.fp("base", "head", 1, "quality", [value])
 
     def test_exact_fingerprint_reuses_evidence_and_producer_is_not_called(self):
         cache = ReviewCache()
-        fp = cache.fingerprint("base", "head", "r1", "quality", ["src"])
+        fp = cache.fingerprint("base", "head", "r1", "quality", ["src"], policy_revision="p1", tests_revision="t1")
         calls = []
         cache.put(fp, {"result": "passed"})
         result = cache.get_or_reuse(fp, lambda: calls.append(True))
@@ -31,13 +36,14 @@ class ReviewCacheTests(unittest.TestCase):
 
     def test_head_base_contract_and_reviewer_changes_invalidate_by_key(self):
         cache = ReviewCache()
-        common = dict(base_sha="base", head_sha="head", contract_revision="r1", reviewer_class="quality", relevant_scope=["src"])
+        common = dict(base_sha="base", head_sha="head", contract_revision="r1", reviewer_class="quality", relevant_scope=["src"], policy_revision="p1", tests_revision="t1")
         original = cache.fingerprint(**common)
         cache.put(original, {"result": "passed"})
         for changed in (
             dict(head_sha="new-head"), dict(base_sha="new-base"),
             dict(contract_revision="r2"), dict(reviewer_class="architecture"),
-            dict(relevant_scope=["tests"]),
+            dict(relevant_scope=["tests"]), dict(policy_revision="p2"),
+            dict(tests_revision="t2"),
         ):
             values = dict(common)
             values.update(changed)
@@ -47,7 +53,7 @@ class ReviewCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".galaxy" / "cache" / "reviews.json"
             cache = ReviewCache(path)
-            fp = cache.fingerprint("base", "head", "r1", "quality", ["src"])
+            fp = cache.fingerprint("base", "head", "r1", "quality", ["src"], policy_revision="p1", tests_revision="t1")
             cache.put(fp, {"result": "passed", "access_token": "secret", "summary": "ok"}, metadata={"api_key": "secret"})
             loaded = ReviewCache(path)
             entry = loaded.get(fp)
@@ -56,11 +62,11 @@ class ReviewCacheTests(unittest.TestCase):
             self.assertEqual(entry.metadata, {})
             raw = path.read_text(encoding="utf-8")
             self.assertNotIn("secret", raw)
-            self.assertEqual(json.loads(raw)["version"], 1)
+            self.assertEqual(json.loads(raw)["version"], 2)
 
     def test_get_or_reuse_records_producer_result_on_miss(self):
         cache = ReviewCache()
-        fp = cache.fingerprint("base", "head", "r1", "quality")
+        fp = cache.fingerprint("base", "head", "r1", "quality", policy_revision="p1", tests_revision="t1")
         result = cache.get_or_reuse(fp, lambda: {"result": "passed"})
         self.assertEqual(result.evidence, {"result": "passed"})
         self.assertTrue(cache.has(fp))

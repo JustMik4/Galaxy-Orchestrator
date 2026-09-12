@@ -1,8 +1,9 @@
 """Deterministic, local cache for review evidence.
 
 The cache key is content identity, not wall-clock freshness.  Any change to
-the base/head, contract revision, reviewer class, or relevant scope produces a
-new key and therefore cannot accidentally reuse an old expensive review.
+the base/head, contract revision, reviewer class, relevant scope, policy, or
+test evidence produces a new key and therefore cannot accidentally reuse an
+old expensive review.
 """
 
 from __future__ import annotations
@@ -59,6 +60,8 @@ class ReviewFingerprint:
     contract_revision: str
     reviewer_class: str
     relevant_scope: tuple[str, ...]
+    policy_revision: str
+    tests_revision: str
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -68,6 +71,8 @@ class ReviewFingerprint:
             "contract_revision": self.contract_revision,
             "reviewer_class": self.reviewer_class,
             "relevant_scope": list(self.relevant_scope),
+            "policy_revision": self.policy_revision,
+            "tests_revision": self.tests_revision,
         }
 
     @property
@@ -94,7 +99,9 @@ class ReviewFingerprint:
 
 
 def make_review_fingerprint(base_sha: str, head_sha: str, contract_revision: Any,
-                            reviewer_class: str, relevant_scope: Any = (), **aliases: Any) -> ReviewFingerprint:
+                            reviewer_class: str, relevant_scope: Any = (), *,
+                            policy_revision: Any, tests_revision: Any,
+                            **aliases: Any) -> ReviewFingerprint:
     # ``scope`` and ``normalized_scope`` are accepted as migration-friendly
     # aliases; the canonical field remains ``relevant_scope``.
     if "scope" in aliases:
@@ -112,6 +119,8 @@ def make_review_fingerprint(base_sha: str, head_sha: str, contract_revision: Any
         "head_sha": head_sha,
         "contract_revision": contract_revision,
         "reviewer_class": reviewer_class,
+        "policy_revision": policy_revision,
+        "tests_revision": tests_revision,
     }
     for name, value in fields.items():
         if not isinstance(value, (str, int)) or not str(value).strip():
@@ -122,6 +131,8 @@ def make_review_fingerprint(base_sha: str, head_sha: str, contract_revision: Any
         contract_revision=str(contract_revision).strip(),
         reviewer_class=str(reviewer_class).strip(),
         relevant_scope=normalize_relevant_scope(relevant_scope),
+        policy_revision=str(policy_revision).strip(),
+        tests_revision=str(tests_revision).strip(),
     )
 
 
@@ -194,6 +205,8 @@ class ReviewEntry:
         fingerprint = make_review_fingerprint(
             fp.get("base_sha"), fp.get("head_sha"), fp.get("contract_revision"),
             fp.get("reviewer_class"), fp.get("relevant_scope", ()),
+            policy_revision=fp.get("policy_revision"),
+            tests_revision=fp.get("tests_revision"),
         )
         # A wrong persisted hash indicates tampering/corruption.  Ignore the
         # entry instead of trusting content under an unrelated key.
@@ -218,9 +231,13 @@ class ReviewCache:
 
     @staticmethod
     def fingerprint(base_sha: str, head_sha: str, contract_revision: Any,
-                    reviewer_class: str, relevant_scope: Any = (), **aliases: Any) -> ReviewFingerprint:
+                    reviewer_class: str, relevant_scope: Any = (), *,
+                    policy_revision: Any, tests_revision: Any,
+                    **aliases: Any) -> ReviewFingerprint:
         return make_review_fingerprint(base_sha, head_sha, contract_revision,
-                                       reviewer_class, relevant_scope, **aliases)
+                                       reviewer_class, relevant_scope,
+                                       policy_revision=policy_revision,
+                                       tests_revision=tests_revision, **aliases)
 
     make_fingerprint = fingerprint
 
@@ -252,11 +269,14 @@ class ReviewCache:
     add = put
 
     def record(self, *, base_sha: str, head_sha: str, contract_revision: Any,
-               reviewer_class: str, relevant_scope: Any = (), evidence: Any = None,
+               reviewer_class: str, relevant_scope: Any = (),
+               policy_revision: Any, tests_revision: Any, evidence: Any = None,
                metadata: Mapping[str, Any] | None = None,
                created_at: str | None = None) -> ReviewEntry:
         return self.put(self.fingerprint(base_sha, head_sha, contract_revision,
-                                         reviewer_class, relevant_scope), evidence,
+                                         reviewer_class, relevant_scope,
+                                         policy_revision=policy_revision,
+                                         tests_revision=tests_revision), evidence,
                         metadata=metadata, created_at=created_at)
 
     def get_or_reuse(self, fingerprint: ReviewFingerprint, producer: Any = None) -> ReviewEntry | Any:
@@ -308,7 +328,7 @@ class ReviewCache:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 1, "entries": [entry.to_dict() for entry in self.entries()]}
+        payload = {"version": 2, "entries": [entry.to_dict() for entry in self.entries()]}
         fd, temporary = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
         try:
             with open(fd, "w", encoding="utf-8", newline="\n") as stream:
