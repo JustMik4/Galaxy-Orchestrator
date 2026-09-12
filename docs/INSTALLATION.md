@@ -161,7 +161,7 @@ Quando `vault.enabled` é verdadeiro, `sync` requer pelo menos um `--snapshot` c
 
 Os conjuntos e as tuplas (`task_id`, `revision`, `source_receipt`) em `tasks` e `authority` precisam coincidir exatamente. Objeto/lista legado serve somente à compatibilidade de `status`/leitura, nunca a mutação. Com Vault desabilitado, `sync` é no-op e não exige snapshot. `--force` não ultrapassa autoridade, revision/receipt monotônicos, frontmatter malformado/duplicado, nem checagens de caminho/link; campos obrigatórios de autoridade não podem ser removidos por `exclude`. Dependências usam somente IDs escalares, e `include`/`exclude` ocorre antes de renderizar.
 
-Para um Vault externo, use apenas `.galaxy/local/operator.toml` com `external = true` e caminho absoluto. O alvo precisa ser disjunto do projeto; caminhos iguais, ancestrais, descendentes, links e reparse points são recusados.
+O caminho de um Vault interno precisa ser relativo e um descendente estrito do projeto; `.` e a raiz do repositório são recusados. Para um Vault externo, use apenas `.galaxy/local/operator.toml` com `external = true` e caminho absoluto. O alvo precisa ser disjunto do projeto; caminhos iguais, ancestrais, descendentes, links e reparse points são recusados.
 
 ## Atualização e reversão
 

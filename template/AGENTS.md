@@ -20,7 +20,9 @@ Before every subagent dispatch, retry, or escalation, run
 and spawn only the exact model/effort pair it authorizes. Immediately after
 spawn, run `galaxy dispatch verify` with the dispatch ID and effective host
 telemetry; an unverified or mismatched route is a `host-routing` blocker, not a
-model-quality failure. Before an expensive review, run
+model-quality failure. A task may select a valid route profile in its request;
+emergency requests must include a stable `task_id`, evidence, and reason, and
+the local persisted per-task limit cannot be supplied by the caller. Before an expensive review, run
 `galaxy dispatch review-check`; reuse evidence only on an exact fingerprint
 match, and persist new completed evidence with `galaxy dispatch review-record`.
 

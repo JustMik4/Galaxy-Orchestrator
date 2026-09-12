@@ -96,13 +96,13 @@ O modo preserva as garantias V1 de um escritor por escopo, revisão independente
 
 O adaptador Codex gerado usa **Sol Medium** (`gpt-5.6-sol`, esforço `medium`) para o root normal. As configurações dos subagentes por papel definem apenas sandbox e autoridade; não fixam modelo nem esforço. O modelo/esforço de cada subagente vem exclusivamente da autorização operacional. Astra é rota excepcional para problemas que exigem capacidade adicional, não root permanente.
 
-O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`balanced` ou `critical`), disponibilidade observada e quota. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
+O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`economy`, `balanced`, `quality` ou `critical`), disponibilidade observada e quota. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
 
 O Quota Guard reserva por padrão 15% da janela de cinco horas e 2% da janela semanal. Abaixo do piso não inicia novos despachos; interrupção de filhos já em execução é apenas best effort. Limiares são política local do operador e não devem ser gravados no repositório do produto. Se a telemetria não estiver disponível, o Doctor informa `UNKNOWN`; disponibilidade desconhecida não equivale a quota infinita.
 
 ### Despacho operacional público
 
-Todo despacho, retry ou escalonamento passa primeiro por `dispatch authorize`; a rota devolvida é a única substituição explícita permitida de modelo/esforço. A autorização aceita somente pares configurados **e observados** no host e aplica a quota local. Depois de iniciar o subagente, `dispatch verify` registra e verifica o modelo/esforço efetivos: a solicitação não é prova de execução.
+Todo despacho, retry ou escalonamento passa primeiro por `dispatch authorize`; a rota devolvida é a única substituição explícita permitida de modelo/esforço. A autorização aceita somente pares configurados **e observados** no host e aplica a quota local. O contrato da tarefa pode escolher um dos quatro perfis válidos sem contornar capability ou quota. Emergency exige `task_id` estável, evidência e motivo; o limite por tarefa é contabilizado atomicamente em estado local, não por um contador fornecido pelo request. Depois de iniciar o subagente, `dispatch verify` registra e verifica o modelo/esforço efetivos: a solicitação não é prova de execução.
 
 Antes de uma revisão dispendiosa, consulte o cache. A reutilização é exata: somente o mesmo fingerprint — `head`, `base`, escopo, contrato, testes, política e classe de revisor — pode reaproveitar evidência; caso contrário, faça a revisão e registre sua evidência.
 

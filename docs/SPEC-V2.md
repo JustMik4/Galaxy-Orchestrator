@@ -18,7 +18,7 @@ Role, specialist, model/effort e action capability são dimensões independentes
 
 O Capability Router escolhe o menor custo esperado que satisfaça risco, histórico, capacidade observada do host e quota. O Emergency Router pode mudar modelo, effort ou contexto, mas exige evidência e nunca ignora a reserva de quota. O Runtime Verifier registra o modelo/effort realmente executados; configuração declarada não é evidência de execução.
 
-Cada dispatch, retry ou escalation chama `dispatch authorize` antes de iniciar o subagente e usa somente a rota efetiva devolvida; a autorização requer suporte configurado e observado e aplica a quota local. Após o spawn, `dispatch verify` confirma o modelo/effort efetivos. Antes de revisão dispendiosa, `dispatch review-check` consulta o cache; somente fingerprint idêntico em head/base, escopo, contrato, testes, política e classe de revisor permite reutilização, que `dispatch review-record` registra.
+Cada dispatch, retry ou escalation chama `dispatch authorize` antes de iniciar o subagente e usa somente a rota efetiva devolvida; a autorização requer suporte configurado e observado e aplica a quota local. O perfil padrão do projeto pode ser sobrescrito pelo contrato da tarefa apenas por um valor válido. Emergency exige `task_id` estável, evidência e motivo; seu limite é consumido atomicamente em estado local, nunca aceito como contador do request. Após o spawn, `dispatch verify` confirma o modelo/effort efetivos. Antes de revisão dispendiosa, `dispatch review-check` consulta o cache; somente fingerprint idêntico em head/base, escopo, contrato, testes, política e classe de revisor permite reutilização, que `dispatch review-record` registra. A normalização de escopo preserva caixa em sistemas case-sensitive.
 
 Contratos continuam exigindo DAG acíclico, escopos literais, um escritor por escopo, worktree isolado, revisão independente quando aplicável, CI da versão atual e integração pela autoridade serializada. Estado CO-OP autoritativo é o coordenador serializado (Issue/workflow e receipts), nunca uma nota Markdown ou inferência de branch.
 
@@ -39,7 +39,7 @@ vault:
   exclude: [prompts, responses, telemetry, secrets]
 ```
 
-`enabled: true` permite um vault interno (`.galaxy/vault/`) ou externo. Caminho externo e preferências do operador ficam em `.galaxy/local/operator.toml` (não rastreado); o lock registra apenas a forma normalizada da configuração, nunca o caminho privado. O caminho deve ser validado como absoluto conhecido, sem traversal, symlink/reparse point ou ser pai/filho do repositório de forma ambígua.
+`enabled: true` permite um vault interno (`.galaxy/vault/`) ou externo. O caminho interno deve ser um descendente estrito do projeto e nunca pode ser `.`/a raiz do repositório. Caminho externo e preferências do operador ficam em `.galaxy/local/operator.toml` (não rastreado); o lock registra apenas a forma normalizada da configuração, nunca o caminho privado. O caminho deve ser validado como absoluto conhecido, sem traversal, symlink/reparse point ou ser pai/filho do repositório de forma ambígua.
 
 ### Arquivos e rastreamento
 
@@ -89,12 +89,12 @@ galaxy dispatch review-check PROJECT --fingerprint FILE
 galaxy dispatch review-record PROJECT --fingerprint FILE --evidence FILE
 galaxy specialists list
 galaxy specialists sync PROJECT [--check]
-galaxy cleanup PROJECT [--preview | --apply]
+galaxy cleanup PROJECT [--preview | --apply] [--retention-days DAYS]
 galaxy vault status PROJECT [--snapshot FILE]
 galaxy vault sync PROJECT [--snapshot FILE] [--check] [--force]
 ```
 
-`vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report, sem relaxar os invariantes de autoridade e integridade do Vault. A sincronização não despacha agentes nem altera claims. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
+`vault sync --check` não grava; `--force` é explícito e só permitido após backup/drift report, sem relaxar os invariantes de autoridade e integridade do Vault. A sincronização não despacha agentes nem altera claims. `cleanup` aceita apenas retenção finita e não negativa e nunca remove os estados canônicos de verificação ou de orçamento emergency. Doctor verifica namespace legado, lock, manifests, drift, permissões do vault, notas fora do schema, segredos, runtime/quota/action capabilities, arquivos gerados rastreados e conflitos pendentes.
 
 Action Resolver e Resource Catalog são APIs internas nesta versão. Não há comandos públicos `route`,
 `specialist explain`, `vault export` ou `doctor --fix-safe`; documentação e automação não devem presumir
