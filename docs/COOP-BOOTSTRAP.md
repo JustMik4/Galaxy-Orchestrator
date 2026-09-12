@@ -1,92 +1,158 @@
-# CO-OP 1.3 — responsáveis equivalentes
+# Bootstrap CO-OP do Galaxy Orchestrator V2
 
-## Uma pessoa hoje, parceiros amanhã
+CO-OP combina declarações locais reproduzíveis com coordenação remota explícita. A instalação V2 configura o projeto para o modo, mas não cria credenciais, issue de controle, ruleset ou permissões no GitHub.
 
-Cadastre operadores reais no AGENT_TEAM e seus IDs em integration_operators. Todos nessa lista têm
-autoridade equivalente para solicitar claims, retomadas e merges. A lista pode conter apenas você.
-integration_lead antigo é ignorado. Codex continua executando os agentes; um job curto no GitHub Actions
-coordena cada operação de estado/integração. O job ativo é o lead temporário, não o computador de alguém.
+## 1. Pré-requisitos
 
-Cada projeto tem seu próprio repositório, Issue de controle e fila. Contribuições podem ser distribuídas
-livremente, respeitando ownership por escopo e dependências. Revisão por parceiro é opcional; Reviewer
-local em contexto separado continua obrigatório. Não há conta, login ou token compartilhado no pacote.
+- projeto Git com remote conhecido;
+- checkout do Galaxy Orchestrator;
+- permissão administrativa no repositório para configurar branch protection/ruleset;
+- autenticação GitHub fora dos arquivos do projeto;
+- checks reais definidos em `.galaxy/checks.json`.
 
-## Ativação no repositório de cada projeto
+Não grave tokens em `.galaxy/`, `AGENTS.md`, `.codex/`, issue de controle ou Vault.
 
-1. Instale CO-OP, configure operators/integration_operators e comandos reais em checks.json.
-2. Coloque workflow multicontroller-control.yml, ferramentas e AGENT_TEAM na branch padrão por uma
-   mudança de bootstrap revisada. O workflow só roda a partir da branch padrão e lê sua versão atual.
-3. Crie uma Issue dedicada, aberta, cujo corpo seja exatamente o JSON de examples/control-state.json.
-   Coloque o número dessa Issue em coordination.control_issue e publique a configuração.
-   Não faça isso com estado vazio se existirem claims antigos: encerre-os ou importe uma fotografia
-   revisada de active/revisions antes de qualquer operação. Não edite o corpo durante operação.
-4. Habilite Actions e permissões de contents/issues/pull-requests write para o workflow, usando o token
-   efêmero GITHUB_TOKEN. Não coloque PATs em arquivos. A organização pode restringir essas permissões.
-5. Configure PR/checks obrigatórios, base atualizada e ausência de bypass/direct push. Não exija revisão
-   humana de parceiro/CODEOWNER. Toda integração deve usar SOMENTE este workflow: desative auto-merge,
-   merge queues paralelas e merges manuais pelos operadores. Proteja workflow/tools/team contra alterações
-   sem revisão. Quando as regras do plano não puderem impor exclusividade, ela será uma obrigação dos
-   mantenedores confiáveis; não alegamos proteção contra administrador ou edição manual do estado.
-6. Confira que o token do workflow consegue integrar respeitando regras, sem bypass. Se o servidor não
-   permite isso, CO-OP remoto ainda não está ativado: ajustar permissões/rulesets é pré-requisito técnico.
+## 2. Instale a declaração CO-OP
 
-## Enviar operação
+```powershell
+python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical --check
+python .\galaxy.py install C:\AI\Projetos\Equipe --mode CO-OP --preset critical
+```
 
-No GitHub: Actions → multicontroller-control → Run workflow, selecione a branch padrão e cole o JSON
-do pedido. Comece pelo exemplo control-claim.json com seus dados reais. Um root com ferramenta GitHub
-autorizada também pode disparar workflow_dispatch. Usuários com permissão para abrir Issues mas fora de
-integration_operators não podem usar o coordenador.
+Revise `.galaxy/team.yml`. A forma inicial é equivalente a:
 
-Antes de enviar, leia version/active/receipts na Issue. Cada pedido usa id novo, expected_version e
-task com task/owner/machine/nonce/revision/scope/depends_on (números dos PRs pré-requisitos).
-- claim: reserva tarefa e escopo; owner deve ser o ator autenticado; revision é a próxima da tarefa.
-- reclaim: responsável retoma para si sem ACK do parceiro, com reason, revision+1 e nonce novo.
-  Preserve todos os campos de contrato e dependências. Estado/integradores não dependem de relógio.
-- release: somente owner atual com revision/nonce/machine atuais pode liberar.
-- merge: inclua pr e evidence no formato gate.json; task deve corresponder ao grant atual. Qualquer
-  integrador autorizado pode solicitar integração, mesmo que outro tenha implementado.
-- recover: use id novo, operation=recover e pending_id do merge incerto. Qualquer integrador pode recuperar.
+```json
+{
+  "coordination": {
+    "automatic_expiry": false,
+    "backend": "github-actions-issue",
+    "capability": "github-actions",
+    "claim_protocol": "serialized-workflow",
+    "control_issue": null,
+    "workflow": ".github/workflows/galaxy-control.yml"
+  },
+  "integration_branch": "main",
+  "integration_operators": [],
+  "mode": "CO-OP",
+  "operators": [],
+  "required_checks": ["galaxy / validate"],
+  "review": {
+    "independent_agent_required": true
+  },
+  "rules": {
+    "direct_main_push": false,
+    "one_writer_per_scope": true
+  },
+  "schema_version": 1
+}
+```
 
-Não comece a editar porque o job foi enfileirado. Espere receipt confirmado no corpo da Issue; compare
-owner/machine/nonce/revision com seu contrato. O workflow processa apenas um job por repositório.
-queue=max guarda até 100 pendentes no GitHub atual; ordem de envio não é garantia de ordem de processamento.
-Estado mudou => pedido falha por expected_version. Releia/reconcilie e prepare novo pedido; sem retry em loop.
-Mesmo id/payload/ator recente devolve receipt. ID reutilizado com outro payload falha. Guarde receipts no
-resumo da Issue da tarefa; o estado central mantém 50 recentes e revisions duráveis contra replay antigo.
+Os arquivos têm extensão YAML por contrato de produto, mas o conteúdo V2 atual é JSON estrito, que é YAML válido.
 
-## Parceiro desconectado ou desistente
+## 3. Configure operadores e issue de controle
 
-Não exige resposta nem transferência manual de permissões entre PCs. Outro integrador envia reclaim
-na mesma fila. Revision antiga deixa de autorizar merge. Todas as integrações devem passar pela fila
-para essa garantia valer. Preserve branches antigas; código útil é trazido para uma tentativa atual,
-com orçamento/histórico mantidos e testes/review novos. Dependências reais não desaparecem com a saída.
+Crie uma única issue de controle no repositório correto. Registre o número em `coordination.control_issue` e liste somente os operadores autorizados em `operators`. Faça essa mudança em branch e revisão normais.
 
-## Merge interrompido
+Cada operador precisa de `id` e `github_login`; `integration_operators` contém IDs autorizados a integrar. Depois da revisão, atualize conscientemente os hashes das declarações:
 
-A intenção pending é gravada antes da chamada API. Se houver falha de rede/runner, novos claims/reclaims
-ficam bloqueados para não disputar uma integração incerta. Qualquer responsável usa recover:
-- PR já merged: reconcilia resultado e libera o grant.
-- PR aberto e mesma evidência/head/base: repete a intenção com SHA esperado.
-- Head/base mudaram ou evidência não serve: feche o PR não integrado e use recover para registrar abort.
-  O grant é preservado; prepare outro PR/pedido com evidências atuais. Não apague pending manualmente.
+```powershell
+python .\galaxy.py lock sync C:\AI\Projetos\Equipe --check
+python .\galaxy.py lock sync C:\AI\Projetos\Equipe
+```
 
-Falhas de infraestrutura ainda podem impedir operação; isso não é dependência de uma pessoa específica.
-Corpo da Issue próximo de 60k requer migração administrativa revisada preservando grants/revisions,
-sem reset automático. O workflow é um protocolo entre mantenedores confiáveis, não um banco contra fraude.
+O protocolo serializado deve preservar:
 
-## Atualizar instalações antigas
+- um escritor por escopo;
+- revisão otimista por `revision` do contrato;
+- claims com lease/heartbeat;
+- dependências em DAG sem ciclos;
+- merge somente após checks e revisão independente;
+- eventos idempotentes e recuperação explícita.
 
-Use update.ps1 com preview e revise o diff. Schema 1/2 migra para 3, mantendo IDs/logins e autorizando
-os IDs existentes como integration_operators; revise essa lista. control_issue começa nulo para evitar
-inventar estado. Desative o protocolo anterior, reconcilie claims e só depois habilite a fila.
-Regras que exigiam outro humano precisam ser ajustadas no GitHub pelo administrador.
+Não edite o corpo de controle em paralelo por caminhos diferentes. A issue é estado de coordenação, não cofre de segredos nem log de prompts.
 
-## Smoke test antes de uso real
+## 4. Ative validação no GitHub
 
-1. Um operador faz claim, Worker, Reviewer separado, testes e merge pela fila.
-2. Dois operadores enviam pedidos com mesma version: um vence, o outro reconcilia sem dupla reserva.
-3. Segundo operador retoma a tarefa do primeiro offline; entrega antiga é recusada.
-4. Simule resposta perdida/runner encerrado durante merge e recupere com outro operador.
-5. Confirme recusa de ator não autorizado, escopo extra, nonce velho, review/head/base antigos.
+O projeto V2 inclui `.github/workflows/galaxy-validate.yml`. Ele:
 
-Testes locais não substituem esse smoke test. Nenhum repositório real foi ativado na geração do pacote.
+- usa permissões `contents: read`;
+- lê `galaxy.lock`;
+- aceita um SHA exato ou a tag exata `v<versão>`;
+- obtém a mesma fonte Galaxy na revisão fixada pelo lock;
+- executa `galaxy.py bootstrap <workspace>` e, em seguida, `galaxy.py validate <workspace> --gate` em Python 3.11.
+
+O checkout novo usado pelo workflow deliberadamente começa sem `.codex/`; o bootstrap o gera localmente antes do gate. Não versione esse runtime nem substitua a fonte fixada por um checkout Galaxy diferente.
+
+Configure no ruleset da branch de integração:
+
+```text
+pull request obrigatório
+push direto bloqueado
+aprovação independente exigida pela política da equipe
+status check obrigatório: galaxy / validate
+```
+
+A renomeação do repositório para `JustMik4/Galaxy-Orchestrator` precisa ocorrer antes de depender da URL canônica gravada no workflow publicado. Não conte com redirects do nome antigo como configuração permanente.
+
+## 5. Ative o coordenador remoto conscientemente
+
+A instalação CO-OP versiona `.github/workflows/galaxy-control.yml`. Ele usa `workflow_dispatch`, concorrência `galaxy-control-v2`, checkout fixado, a revisão exata de `galaxy.lock` e `lib.coordinator`; não usa o runtime V1 vendorizado. Sua presença isolada não prova ativação: enquanto `control_issue`, operadores/integradores, repositório/tag canônicos ou permissões estiverem incompletos, o Doctor falha fechado.
+
+Uma automação de coordenação aceitável deve:
+
+- validar actor contra `operators`;
+- rejeitar revisão obsoleta;
+- serializar mutações do estado de controle;
+- nunca executar comandos fornecidos livremente por comentários;
+- não expor secrets em eventos de fork/PR;
+- registrar resultado inequívoco de claim, heartbeat, finish e reclaim;
+- preservar as regras de gate do produto.
+
+Artefatos históricos sob `coop/` e `.multicontroller/` descrevem ou implementam a linha V1. A migração substitui o workflow de controle V1 somente quando sua autoria é comprovada pelo manifesto; cópia ausente do manifesto ou modificada bloqueia a migração para revisão humana.
+
+## 6. Valide antes do primeiro claim
+
+```powershell
+python .\galaxy.py bootstrap C:\AI\Projetos\Equipe --check
+python .\galaxy.py validate C:\AI\Projetos\Equipe --gate
+python .\galaxy.py doctor C:\AI\Projetos\Equipe --json
+git -C C:\AI\Projetos\Equipe status --short
+```
+
+No GitHub, confirme manualmente:
+
+1. workflow executado a partir da revisão fixada no lock;
+2. check publicado exatamente como `galaxy / validate`;
+3. ruleset bloqueando merge quando o check falha;
+4. operador não autorizado sem permissão de mutar a coordenação;
+5. duas solicitações concorrentes resolvidas por serialização;
+6. claim expirado recuperado sem sobrescrever trabalho ativo;
+7. revisão independente antes do merge.
+
+## 7. Fluxo operacional
+
+```text
+registrar tarefa e dependências
+→ solicitar claim com revisão esperada
+→ trabalhar em galaxy/<operador>/<tarefa>-<slug>-<máquina>-<tentativa>
+→ heartbeat enquanto a tarefa estiver ativa
+→ publicar evidência e checks
+→ revisão independente
+→ concluir claim
+→ integrar apenas com galaxy / validate verde
+```
+
+Branches históricas `codex/*` continuam reconhecidas pelo Lifecycle Manager, mas novas tarefas usam `galaxy/*`.
+
+## 8. Diagnóstico e recuperação
+
+- `revision mismatch`: recarregue o estado, reavalie dependências e tente com a revisão atual.
+- `actor not authorized`: corrija `operators` por mudança revisada; não amplie permissões do workflow.
+- check ausente: confirme nome do job, gatilho, lock e commands do produto.
+- coordenador não ativo: interrompa novos claims; o arquivo CO-OP local não substitui automação remota.
+- lease expirado: verifique heartbeat e atividade real antes de reclaim.
+- `.codex/` rastreado: retire apenas caminhos comprovadamente gerados do índice e preserve a cópia local.
+- estado V1: execute `galaxy migrate --preview`; não renomeie diretórios manualmente.
+- declarações alteradas: execute `galaxy lock sync <PROJETO> --check`, revise o diff e só então aplique sem `--check`.
+
+Use `python .\galaxy.py cleanup <PROJETO> --preview` para inspecionar candidatos antigos. Aplique limpeza somente depois de excluir branches/worktrees ativos.

@@ -1,34 +1,233 @@
-# Galaxy-Multicontroller
+# Galaxy Orchestrator V2
 
-A cooperative multicontroller environment for Codex. This project orchestrates Astra, Sol, and Luna agents using strict deterministic contracts, DAG-based integration, and adaptive routing.
+O Galaxy Orchestrator coordena agentes de engenharia com roteamento por capacidade, proteção de quota, bootstrap reproduzível e limites explícitos de autoridade. A versão canônica deste checkout é **2.0.0**.
 
-## Overview
-Galaxy-Multicontroller is designed for reliable and predictable AI agent orchestration. It uses native Codex capabilities to plan, delegate, interrupt, and review tasks without relying on background daemons or undocumented services. This is a cooperative protocol for trusted operators, focusing on strict contracts rather than open-ended agent loops.
+O código de desenvolvimento ainda pode estar aberto na pasta histórica `C:\AI\Codex-Multicontroller`. O destino canônico é `C:\AI\Galaxy-Orchestrator` e o repositório-alvo é `JustMik4/Galaxy-Orchestrator`; a mudança física e a renomeação no GitHub só são consideradas concluídas depois da validação final descrita em [Publicação](docs/PUBLISH.md).
 
-## Key Features
-* **Flexible Operation Modes:** Supports both SOLO (single local root) and CO-OP (multiple operators with distinct logins and equivalent authority).
-* **Strict Architecture Isolation:** The master installation package remains completely isolated from project directories. Each project receives a versioned snapshot of configurations to ensure reproducibility.
-* **Intelligent Adaptive Controller:** A deterministic engine that makes routing decisions based on failure signatures and attempt history. It dynamically scales model complexity, attempts same-agent repairs, or triggers immediate circuit breakers for scope regressions.
-* **Queue-Based Synchronization:** Live state coordination is managed via a dedicated GitHub Issue using a single serial `workflow_dispatch` (`multicontroller-control`).
-* **Deterministic Budgets & Retries:** Implements strict limits (e.g., 4 total attempts for balanced operations, 5 for critical ones) to prevent infinite loops and control API costs.
+## Requisitos
 
-## The Stellar Hierarchy (Roles)
-Traffic, budget, and authority are routed based on specific model capabilities and risk profiles:
+- Windows com PowerShell 7;
+- Python 3.11 ou superior;
+- Git;
+- um projeto Git existente, separado da instalação master do Galaxy.
 
-* **Root (Astra High / Sol High):** Highest authority. Handles contracts, budgets, decisions, and architecture planning. Dispatches execution via explicit handoffs.
-* **Reviewer (Sol High / Astra High):** Focused on independent reading and code review. Does not implement features directly.
-* **Worker & Hard Worker (Luna Medium / Luna High):** Handles bounded code implementation and difficult local-scope defects. Cannot alter implicit architecture.
-* **Explorer & Researcher (Luna Low / Luna Medium):** Maps file structures, gathers sources, and reads evidence without permissions to edit the final product.
-* **Tester (Luna Medium):** Isolates test executions in a separate workspace. Cannot silently repair the product.
+O núcleo usa a biblioteca padrão do Python. Integrações externas continuam sujeitas à autenticação, disponibilidade e limites dos respectivos serviços.
 
-## Getting Started
-*Note: The master package must be kept outside of standard project directories. Projects should never be placed inside `.codex` or the master package.*
+## Quickstart
 
-1. Run the `Iniciar.bat` script to open the Python 3.11+ staging menu.
-2. Select your target project directory (e.g., `C:\AI\Projetos\<name>`).
-3. Validate the installation preflight checks.
-4. The system will deploy the versioned `.codex`, `AGENT_TEAM.yml`, and `.multicontroller` snapshots without overriding your global settings.
+Execute os comandos a partir da raiz deste repositório. O exemplo usa `C:\AI\Projetos\MeuProjeto` como projeto de produto.
 
-## Installation and validation
+```powershell
+python .\galaxy.py --help
 
-See [installation guide](docs/INSTALLATION.md), [CO-OP setup](docs/COOP-BOOTSTRAP.md), [SPEC](docs/SPEC-V1.md), and [validation evidence](docs/VALIDATION.md). Version 1.3.0 passes 52 local tests; live GitHub coordination requires activation and validation in each project repository.
+# Mostra o que seria instalado, sem alterar o projeto.
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --context-economy off --check
+
+# Instala as declarações V2 e gera o adaptador Codex local.
+python .\galaxy.py install C:\AI\Projetos\MeuProjeto --mode SOLO --preset balanced --context-economy off
+
+# Confere configuração e artefatos gerados.
+python .\galaxy.py bootstrap C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto
+python .\galaxy.py doctor C:\AI\Projetos\MeuProjeto --json
+```
+
+Antes de usar o gate, configure comandos reais do produto em `.galaxy/checks.json`:
+
+```json
+{
+  "commands": [
+    ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
+  ],
+  "schema_version": 1
+}
+```
+
+Então execute:
+
+```powershell
+python .\galaxy.py validate C:\AI\Projetos\MeuProjeto --gate
+```
+
+O gate falha de propósito quando `commands` está vazio. Veja [Instalação](docs/INSTALLATION.md) e [Validação](docs/VALIDATION.md).
+
+## Layout de um projeto V2
+
+```text
+MeuProjeto/
+├── .gitattributes                    # preserva bytes das declarações em qualquer checkout
+├── AGENTS.md                         # instruções estáveis do projeto
+├── galaxy.lock                       # versão e revisões reproduzíveis
+├── .galaxy/
+│   ├── project.yml                   # adaptador, routing, context economy, specialists e vault
+│   ├── team.yml                      # modo e política de coordenação
+│   └── checks.json                   # comandos reais do produto
+├── .github/workflows/
+│   └── galaxy-validate.yml           # gate reproduzível no GitHub
+└── .codex/                           # saída local gerada; não versionada
+```
+
+`AGENTS.md`, `.galaxy/`, `galaxy.lock`, `.gitattributes` e os workflows aplicáveis são versionados. O lock autentica os bytes de `AGENTS.md`, `project.yml`, `team.yml` e `checks.json`; `.gitattributes` mantém esses bytes estáveis inclusive com `core.autocrlf=true`. Depois de revisar uma alteração legítima nessas quatro declarações, atualize o lock explicitamente:
+
+```powershell
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py lock sync C:\AI\Projetos\MeuProjeto
+```
+
+O primeiro comando é somente leitura. `.codex/`, `.galaxy/local/`, `.galaxy/runtime/`, `.galaxy/cache/`, `.galaxy/install/` e `.galaxy/evidence/` são locais ou gerados. O bootstrap registra em `.galaxy/install/bootstrap-state.json` (ignorado) os hashes dos bytes exatos que ele gerou e dos quais é dono. Um marcador de texto `GENERATED BY GALAXY` nunca basta para autorizar sobrescrita ou remoção: estado ausente, corrompido ou incompatível preserva o artefato divergente como drift para revisão humana.
+
+## SOLO e CO-OP
+
+`SOLO` usa backend local e mantém as garantias de branch protegida, checks do produto e revisão independente configurada:
+
+```powershell
+python .\galaxy.py init C:\AI\Projetos\Solo --mode SOLO --preset balanced
+```
+
+`CO-OP` grava em `.galaxy/team.yml` a coordenação serializada, instala o workflow `galaxy-control.yml` e declara o check requerido `galaxy / validate`:
+
+```powershell
+python .\galaxy.py init C:\AI\Projetos\Equipe --mode CO-OP --preset critical
+```
+
+O modo preserva as garantias V1 de um escritor por escopo, revisão independente, dependências em DAG e merge condicionado. O workflow falha fechado até que operadores, integradores, issue de controle, repositório/tag canônicos e regras da branch estejam configurados. A instalação não cria credenciais, issue, ruleset ou permissões no GitHub; veja [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md).
+
+## Modelos, routing e quota
+
+O adaptador Codex gerado usa **Sol Medium** (`gpt-5.6-sol`, esforço `medium`) para o root normal. As configurações dos subagentes por papel definem apenas sandbox e autoridade; não fixam modelo nem esforço. O modelo/esforço de cada subagente vem exclusivamente da autorização operacional. Astra é rota excepcional para problemas que exigem capacidade adicional, não root permanente.
+
+O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`economy`, `balanced`, `quality` ou `critical`), disponibilidade observada e quota. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
+
+O Quota Guard reserva por padrão 15% da janela de cinco horas e 2% da janela semanal. Abaixo do piso não inicia novos despachos; interrupção de filhos já em execução é apenas best effort. Limiares são política local do operador e não devem ser gravados no repositório do produto. Se a telemetria não estiver disponível, o Doctor informa `UNKNOWN`; disponibilidade desconhecida não equivale a quota infinita.
+
+### Despacho operacional público
+
+Todo despacho, retry ou escalonamento passa primeiro por `dispatch authorize`; a rota devolvida é a única substituição explícita permitida de modelo/esforço. A autorização aceita somente pares configurados **e observados** no host e aplica a quota local. O contrato da tarefa pode escolher um dos quatro perfis válidos sem contornar capability ou quota. Emergency exige `task_id` estável, evidência e motivo; o limite por tarefa é contabilizado atomicamente em estado local, não por um contador fornecido pelo request. Depois de iniciar o subagente, `dispatch verify` registra e verifica o modelo/esforço efetivos: a solicitação não é prova de execução.
+
+Antes de uma revisão dispendiosa, consulte o cache. A reutilização é exata: somente o mesmo fingerprint — `head`, `base`, escopo, contrato, testes, política e classe de revisor — pode reaproveitar evidência; caso contrário, faça a revisão e registre sua evidência.
+
+```powershell
+python .\galaxy.py dispatch authorize C:\AI\Projetos\MeuProjeto --request REQUEST.json --capabilities CAPABILITIES.json --quota QUOTA.json
+python .\galaxy.py dispatch verify C:\AI\Projetos\MeuProjeto --dispatch-id ID --spawn-id ID --effective-model MODELO --effective-effort ESFORCO
+python .\galaxy.py dispatch review-check C:\AI\Projetos\MeuProjeto --fingerprint FINGERPRINT.json
+python .\galaxy.py dispatch review-record C:\AI\Projetos\MeuProjeto --fingerprint FINGERPRINT.json --evidence EVIDENCIA.json
+```
+
+## Papéis e especialistas
+
+Papel, especialista, modelo e ferramenta são dimensões independentes:
+
+- o **papel** define autoridade;
+- o **especialista** fornece instruções e recursos do domínio;
+- o **modelo/esforço** é escolhido pelo router;
+- a **capability** determina quais ações estão realmente disponíveis.
+
+Especialistas têm fonte Markdown com frontmatter, catálogo frio e hot set materializado sob demanda. A saída do adaptador é determinística e não amplia autoridade. Para inspecionar ou sincronizar:
+
+```powershell
+python .\galaxy.py specialists list
+python .\galaxy.py specialists sync C:\AI\Projetos\MeuProjeto --check
+python .\galaxy.py specialists sync C:\AI\Projetos\MeuProjeto
+```
+
+## Economia de contexto
+
+`context_economy.mode` aceita `off`, `balanced` ou `aggressive`. O padrão real é
+`off`: não há truncamento, compactação ou persistência de evidência pela camada.
+`balanced` usa handoffs em torno de 350 tokens e até 80 linhas inline;
+`aggressive` usa cerca de 200 tokens e 40 linhas. Os dois preservam falhas,
+blockers, riscos, decisões e localizações, gravam overflow sanitizado sob
+`.galaxy/evidence/<task>/` e reutilizam referências estáveis. Os números são
+orçamentos internos, não promessa de economia; telemetria de contexto permanece
+separada da quota da conta.
+
+Selecione o modo sem prompt na instalação com `--context-economy`. Em um projeto
+existente, edite `project.yml`, revise a mudança e execute `galaxy lock sync`.
+`bootstrap --context-economy MODE` confere que o argumento coincide com a
+declaração autenticada; ele nunca muda política rastreada silenciosamente. Uma
+falha `context-insufficient` expande as referências e repete a mesma rota antes
+de qualquer promoção de modelo.
+
+## Bootstrap, Doctor e ciclo de vida
+
+O bootstrap deriva `.codex/` das declarações do projeto. `--check` detecta criação, atualização, remoção ou drift pendente sem aplicar mudanças.
+
+O Galaxy Doctor verifica configuração, lock, consistência do bootstrap, poluição Git, resíduos V1, checks, runtime, quota, capabilities de ação, Vault e ciclo de vida. `WARN`/`UNKNOWN` não são convertidos artificialmente em sucesso; `FAIL` retorna código diferente de zero.
+
+O Lifecycle Manager apresenta um plano antes de remover candidatos inativos. Ele reconhece branches novas `galaxy/*` e branches históricas `codex/*`, preservando itens ativos ou inseguros:
+
+```powershell
+python .\galaxy.py cleanup C:\AI\Projetos\MeuProjeto --preview
+python .\galaxy.py cleanup C:\AI\Projetos\MeuProjeto --apply
+```
+
+Revise o preview antes de `--apply`; a identidade de cada arquivo no preview fica vinculada à aplicação. Componentes link/reparse são recusados. Em POSIX, a limpeza move para estágio privado, verifica novamente a identidade e só então remove; no Windows, remove o handle exato verificado.
+
+## Migração V1 para V2
+
+A migração é semântica: classifica arquivos do projeto, arquivos Galaxy intactos e arquivos Galaxy modificados; não faz substituição global de texto. O preview não altera o projeto:
+
+```powershell
+python .\galaxy.py migrate C:\AI\Projetos\Legado --preview
+python .\galaxy.py migrate C:\AI\Projetos\Legado
+```
+
+Antes da primeira mutação, o motor cria backup fora do projeto, em `local/migrations/` da instalação master, e registra um receipt com hashes, estado do índice Git, transformações, preservações, conflitos, validação e Doctor. Conflitos bloqueiam a finalização. Para desfazer, use o caminho de receipt retornado:
+
+```powershell
+python .\galaxy.py migrate C:\AI\Projetos\Legado --rollback C:\caminho\para\receipt.json
+```
+
+Conteúdo não pertencente ao Galaxy sob `.agents/` é preservado. Um Vault encontrado no projeto V1 entra apenas no inventário e não é modificado pela migração. Consulte [SPEC V1](docs/SPEC-V1.md) para o formato histórico e [SPEC V2](docs/SPEC-V2.md) para o contrato atual.
+
+## Action Resolver e Resource Catalog
+
+O Action Resolver escolhe, em ordem padrão, capability nativa/aplicativo conectado, connector ou plugin, CLI, API e navegador. Fallback pelo navegador exige aprovação explícita. A seleção é uma API interna; não existe comando `galaxy action` na CLI atual.
+
+O Resource Catalog é local, compacto e determinístico. `registry/resources.json` começa com poucas fontes verificadas. Conteúdo do projeto `public-apis` pode ser importado somente de arquivo ou string local como candidatos `unverified`; o importador não acessa a rede, não transforma essa lista em fonte de verdade e não injeta READMEs completos. O catálogo também é API interna nesta versão.
+
+## Obsidian Vault opcional
+
+O Vault fica **desativado por padrão** em `.galaxy/project.yml`. Quando ativado pelo proprietário do projeto, ele projeta tarefas, marcos e resumos em Markdown. Prompts, respostas, telemetria e segredos ficam excluídos por padrão; o Obsidian não é requisito para operar o Galaxy.
+
+```powershell
+python .\galaxy.py vault status C:\AI\Projetos\MeuProjeto
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto --snapshot estado-autoritativo.json --check
+python .\galaxy.py vault sync C:\AI\Projetos\MeuProjeto --snapshot estado-autoritativo.json
+```
+
+Com Vault habilitado, `sync` exige `--snapshot` local com envelope autoritativo versionado; objetos/listas legados são compatibilidade somente de `status`/leitura e não podem mutar o Vault:
+
+```json
+{
+  "schema_version": 1,
+  "tasks": [{"task_id":"T-9","revision":1,"source_receipt":"receipt-1","status":"active","owner":"alice","updated_at":"2026-09-12T12:00:00Z"}],
+  "authority": [{"task_id":"T-9","revision":1,"source_receipt":"receipt-1"}]
+}
+```
+
+Os conjuntos e tuplas (`task_id`, `revision`, `source_receipt`) de `tasks` e `authority` devem coincidir exatamente. Com Vault desabilitado, `sync` continua no-op mesmo sem snapshot. `--force` não ignora autoridade, monotonicidade de revision/receipt, frontmatter malformado ou duplicado, nem verificações de caminho/link; frontmatter obrigatório de autoridade não pode ser excluído. Dependências são IDs escalares e `include`/`exclude` é aplicado antes da renderização. Detalhes de modos e privacidade estão no [SPEC V2](docs/SPEC-V2.md).
+
+Um Vault externo é configurado somente no arquivo local ignorado `.galaxy/local/operator.toml`. O caminho deve ser absoluto, sem link/reparse point e totalmente separado da árvore do projeto: não pode ser o próprio projeto, um ancestral ou um descendente.
+
+## Compatibilidade e limites
+
+- `multicontroller.py` é um wrapper temporário com aviso de depreciação; novos fluxos usam `galaxy.py`.
+- `.multicontroller/`, `AGENT_TEAM.yml`, `.multicontroller/tools` e metadados V1 são aceitos apenas em migração/compatibilidade.
+- Projetos novos usam `.galaxy/` e não vendorizam ferramentas do master.
+- Provedores LLM gratuitos externos não fazem parte da versão 2.0.0.
+- O Galaxy não concede credenciais, quota, permissões do GitHub ou acesso a modelos.
+- A aceitação local e o smoke Lexy estão registrados em [Validação](docs/VALIDATION.md). Renomeação local, publicação do repositório/tag, rulesets e execução remota continuam limites externos separados.
+
+## Documentação
+
+- [Especificação V2](docs/SPEC-V2.md)
+- [Instalação](docs/INSTALLATION.md)
+- [Validação](docs/VALIDATION.md)
+- [CO-OP Bootstrap](docs/COOP-BOOTSTRAP.md)
+- [Publicação](docs/PUBLISH.md)
+- [Fontes](docs/SOURCES.md)
+- [Changelog](docs/CHANGELOG.md)
+- [Especificação V1 histórica](docs/SPEC-V1.md)
+
+Licença: [MIT](LICENSE).

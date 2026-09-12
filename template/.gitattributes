@@ -1,0 +1,5 @@
+.gitattributes -text
+AGENTS.md -text
+.galaxy/project.yml -text
+.galaxy/team.yml -text
+.galaxy/checks.json -text

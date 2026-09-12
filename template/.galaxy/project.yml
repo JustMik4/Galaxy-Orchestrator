@@ -1,0 +1,34 @@
+{
+  "adapter": "codex",
+  "context_economy": {
+    "mode": "off"
+  },
+  "name": "project",
+  "routing": {
+    "profile": "balanced"
+  },
+  "schema_version": 1,
+  "specialists": {
+    "names": [],
+    "packs": [
+      "core"
+    ]
+  },
+  "vault": {
+    "enabled": false,
+    "exclude": [
+      "prompts",
+      "responses",
+      "telemetry",
+      "secrets"
+    ],
+    "include": [
+      "tasks",
+      "milestones",
+      "summaries"
+    ],
+    "mode": "projection",
+    "path": ".galaxy/vault",
+    "sync": "manual"
+  }
+}

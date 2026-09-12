@@ -1,0 +1,26 @@
+{
+  "adapters": {
+    "codex": "codex-v1",
+    "schema_version": 1
+  },
+  "declarations": {
+    "AGENTS.md": "69984d57a1096507c71576190e3247b59206215088bd183501f83f037e425f4b",
+    ".galaxy/project.yml": "bf9793af39d5754d4c63f13089022bee6237a05f154a3c3b07b759ecba2c2a0d",
+    ".galaxy/team.yml": "bb5aca2be72c310f064223183e9e4ea82074bb17236da90fb11db2082a0722b0",
+    ".galaxy/checks.json": "52edacd052b0610193043dcbe6746d595f06f246a2925424cda1a9bcafc502a4"
+  },
+  "galaxy": {
+    "source_revision": "v2.0.0",
+    "version": "2.0.0"
+  },
+  "migration_schema": 1,
+  "project_schema": 1,
+  "schema_version": 1,
+  "specialists": {
+    "catalog_revision": "3cd4556e146f0b2b1b0b05a275a1b394e49497d4d75a0ae97d193e0af5b1c7b4",
+    "names": [],
+    "packs": [
+      "core"
+    ]
+  }
+}

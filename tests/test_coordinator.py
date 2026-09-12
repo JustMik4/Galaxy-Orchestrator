@@ -1,7 +1,9 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
@@ -104,3 +106,22 @@ class CoordinatorTests(unittest.TestCase):
         co.run(self.store,self.team,'alice',q)
         q=self.req('two',1,'r2','reclaim');q['task']['revision']=2;q['reason']='resume'
         with self.assertRaises(ValueError):co.run(self.store,self.team,'bob',q)
+
+    def test_team_loader_prefers_canonical_v2_and_preserves_v1_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = {
+                'schema_version': 1, 'mode': 'CO-OP',
+                'operators': [{'id': 'v2', 'github_login': 'alice'}],
+            }
+            legacy = {
+                'schema_version': 3, 'mode': 'CO-OP',
+                'operators': [{'id': 'v1', 'github_login': 'bob'}],
+            }
+            (root / '.galaxy').mkdir()
+            (root / '.galaxy/team.yml').write_text(json.dumps(canonical))
+            (root / 'AGENT_TEAM.yml').write_text(json.dumps(legacy))
+
+            self.assertEqual(co.load_team(root), canonical)
+            (root / '.galaxy/team.yml').unlink()
+            self.assertEqual(co.load_team(root), legacy)

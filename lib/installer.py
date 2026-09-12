@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import uuid
 
@@ -28,6 +29,355 @@ def safe_path(path):
 
 def encoded(value):
     return (json.dumps(value, indent=2, ensure_ascii=False)+'\n').encode('utf-8')
+
+
+def _path_info(path):
+    """Return lstat data without ever resolving a missing/link target."""
+    try:
+        return Path(path).lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _is_link_or_reparse(path, info=None):
+    info = info or _path_info(path)
+    if info is None:
+        return False
+    junction = getattr(Path(path), 'is_junction', None)
+    return (
+        stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, 'st_file_attributes', 0)
+                & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0))
+        or bool(junction and junction())
+    )
+
+
+def _unlink_link_only(path, info):
+    """Remove a link/reparse entry itself, never anything below its target."""
+    path = Path(path)
+    if stat.S_ISDIR(info.st_mode):
+        os.rmdir(path)
+    else:
+        path.unlink()
+
+
+def _remove_rollback_links(project, target):
+    """Remove attacker-substituted links on a rollback path without following them."""
+    project, target = Path(project), Path(target)
+    try:
+        relative = target.relative_to(project)
+    except ValueError as exc:
+        raise ValueError('Rollback target escaped project: ' + str(target)) from exc
+    project_info = _path_info(project)
+    if project_info is None or _is_link_or_reparse(project, project_info):
+        raise ValueError('Project root changed during rollback: ' + str(project))
+    current = project
+    for part in relative.parts:
+        current /= part
+        info = _path_info(current)
+        if info is not None and _is_link_or_reparse(current, info):
+            _unlink_link_only(current, info)
+            # Removing an ancestor makes all remaining components absent.
+            break
+
+
+def _rollback_write(project, target, content):
+    """Restore bytes atomically after revalidating the destination path."""
+    project, target = Path(project), Path(target)
+    rollback_temp = project / ('.galaxy-rollback-' + uuid.uuid4().hex + '.tmp')
+    try:
+        safe_path(rollback_temp)
+        with rollback_temp.open('xb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _remove_rollback_links(project, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        safe_path(target.parent)
+        safe_path(target)
+        os.replace(rollback_temp, target)
+    finally:
+        info = _path_info(rollback_temp)
+        if info is not None:
+            if _is_link_or_reparse(rollback_temp, info):
+                _unlink_link_only(rollback_temp, info)
+            elif stat.S_ISREG(info.st_mode):
+                rollback_temp.unlink()
+
+
+def _rollback_remove(project, target):
+    """Remove a newly-created file or substituted link, but never its referent."""
+    project, target = Path(project), Path(target)
+    _remove_rollback_links(project, target)
+    safe_path(target)
+    info = _path_info(target)
+    if info is None:
+        return
+    if _is_link_or_reparse(target, info):
+        _unlink_link_only(target, info)
+    elif stat.S_ISREG(info.st_mode):
+        target.unlink()
+    else:
+        raise ValueError('Rollback expected a file: ' + str(target))
+
+
+V2_TRACKED_FILES = (
+    '.gitattributes',
+    'AGENTS.md',
+    '.galaxy/project.yml',
+    '.galaxy/team.yml',
+    '.galaxy/checks.json',
+    'galaxy.lock',
+    '.github/workflows/galaxy-validate.yml',
+)
+
+V2_LOCKED_DECLARATIONS = (
+    'AGENTS.md',
+    '.galaxy/project.yml',
+    '.galaxy/team.yml',
+    '.galaxy/checks.json',
+)
+
+V2_COOP_FILES = (
+    '.github/workflows/galaxy-control.yml',
+)
+
+GALAXY_ATTRIBUTES_MARKER = b'# Galaxy declaration integrity'
+
+V1_TEMPLATE_FILES = (
+    'AGENT_TEAM.yml',
+    'AGENTS.md',
+    '.agents/skills/multicontroller/SKILL.md',
+    '.agents/skills/multicontroller/references/contract.md',
+    '.agents/skills/multicontroller/references/gates.md',
+    '.agents/skills/multicontroller/references/learning.md',
+    '.agents/skills/multicontroller/references/remote.md',
+    '.codex/config.toml',
+    '.codex/agents/explorer.toml',
+    '.codex/agents/hard-worker.toml',
+    '.codex/agents/researcher.toml',
+    '.codex/agents/reviewer.toml',
+    '.codex/agents/tester.toml',
+    '.codex/agents/worker.toml',
+    '.multicontroller/checks.json',
+    '.multicontroller/examples/control-claim.json',
+    '.multicontroller/examples/control-state.json',
+    '.multicontroller/examples/gate.json',
+    '.multicontroller/examples/grant.json',
+    '.multicontroller/examples/history.json',
+    '.multicontroller/examples/reclaim.json',
+    '.multicontroller/examples/usage.json',
+    '.multicontroller/messages/BLOCKER.md',
+    '.multicontroller/messages/CLAIM-ACK.md',
+    '.multicontroller/messages/CLAIM-GRANT.md',
+    '.multicontroller/messages/CLAIM-REQUEST.md',
+    '.multicontroller/messages/EXECUTION-SUMMARY.md',
+    '.multicontroller/messages/HANDOFF.md',
+    '.multicontroller/messages/INTERFACE-CHANGE.md',
+    '.multicontroller/messages/RELEASE.md',
+    '.multicontroller/messages/REVOKE.md',
+)
+
+V1_COOP_FILES = (
+    '.github/CODEOWNERS',
+    '.github/pull_request_template.md',
+    '.github/ISSUE_TEMPLATE/agent-task.yml',
+    '.github/workflows/multicontroller-control.yml',
+    '.github/workflows/multicontroller.yml',
+)
+
+
+def merge_gitattributes(original, canonical):
+    """Put one canonical Galaxy attributes block after all project rules."""
+    rules = tuple(
+        rule for rule in canonical.splitlines()
+        if rule and rule != GALAXY_ATTRIBUTES_MARKER
+    )
+    managed_lines = {GALAXY_ATTRIBUTES_MARKER, *rules}
+    project_content = b''.join(
+        line for line in original.splitlines(keepends=True)
+        if line.rstrip(b'\r\n') not in managed_lines
+    )
+    separator = (
+        b'' if not project_content or project_content.endswith((b'\n', b'\r'))
+        else b'\n'
+    )
+    block = GALAXY_ATTRIBUTES_MARKER + b'\n'
+    if rules:
+        block += b'\n'.join(rules) + b'\n'
+    return project_content + separator + block
+
+
+def install_v2(master, project, check=False, mode='SOLO', preset='balanced', context_economy='off'):
+    """Install the canonical V2 project snapshot and local Codex projection.
+
+    All bytes are rendered in an isolated staging directory first.  Occupied
+    destinations must match exactly, and any write failure restores the prior
+    project bytes before returning an error.
+    """
+    master, project = safe_path(master), safe_path(project)
+    if master == project or master in project.parents or project in master.parents:
+        raise ValueError('Master and project must be separate directory trees')
+    if not project.is_dir():
+        raise ValueError('Project directory must already exist')
+    if mode not in ('SOLO', 'CO-OP'):
+        raise ValueError('invalid V2 mode')
+    if preset not in ('balanced', 'critical'):
+        raise ValueError('invalid V2 preset')
+    if context_economy not in ('off', 'balanced', 'aggressive'):
+        raise ValueError('invalid context economy mode')
+
+    with tempfile.TemporaryDirectory(prefix='galaxy-install-') as temporary:
+        stage = Path(temporary)
+        exclude_original = None
+        tracked_files = V2_TRACKED_FILES + (V2_COOP_FILES if mode == 'CO-OP' else ())
+        for name in tracked_files:
+            source = safe_path(master / 'template' / name)
+            if not source.is_file():
+                raise ValueError('Missing canonical template file: ' + name)
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        team_path = stage / '.galaxy/team.yml'
+        team = json.loads(team_path.read_text(encoding='utf-8'))
+        team['mode'] = mode
+        if mode == 'CO-OP':
+            team['coordination'] = {
+                'automatic_expiry': False,
+                'backend': 'github-actions-issue',
+                'capability': 'github-actions',
+                'claim_protocol': 'serialized-workflow',
+                'control_issue': None,
+                'workflow': '.github/workflows/galaxy-control.yml',
+            }
+            team['required_checks'] = ['galaxy / validate']
+        team_path.write_bytes(encoded(team))
+        project_path = stage / '.galaxy/project.yml'
+        project_config = json.loads(project_path.read_text(encoding='utf-8'))
+        project_config['routing'] = {'profile': preset}
+        project_config['context_economy'] = {'mode': context_economy}
+        project_path.write_bytes(encoded(project_config))
+        lock_path = stage / 'galaxy.lock'
+        lock = json.loads(lock_path.read_text(encoding='utf-8'))
+        lock['declarations'] = {
+            name: digest((stage / name).read_bytes())
+            for name in V2_LOCKED_DECLARATIONS
+        }
+        lock_path.write_bytes(encoded(lock))
+        if (project / '.git').is_dir():
+            exclude = project / '.git/info/exclude'
+            staged_exclude = stage / '.git/info/exclude'
+            staged_exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude_original = exclude.read_bytes() if exclude.is_file() else b''
+            staged_exclude.write_bytes(exclude_original)
+
+        try:
+            from .bootstrap import bootstrap
+        except ImportError:
+            from bootstrap import bootstrap  # type: ignore
+        bootstrap(stage, catalog_root=master / 'specialists')
+        sources = {
+            path.relative_to(stage).as_posix(): path.read_bytes()
+            for path in stage.rglob('*') if path.is_file()
+        }
+        changes = {}
+        expected_current = {}
+        for name, content in sorted(sources.items()):
+            target = safe_path(project / name)
+            if target.exists():
+                if not target.is_file():
+                    raise ValueError('Expected a file: ' + name)
+                current = target.read_bytes()
+                if name == '.gitattributes':
+                    content = merge_gitattributes(current, content)
+                    if current != content:
+                        changes[name] = content
+                        expected_current[name] = current
+                elif current != content and name == '.git/info/exclude' and current == exclude_original:
+                    changes[name] = content
+                    expected_current[name] = current
+                elif current != content:
+                    raise ValueError('Existing incompatible managed file; reconcile first: ' + name)
+            else:
+                if name == '.gitattributes':
+                    content = merge_gitattributes(b'', content)
+                changes[name] = content
+                expected_current[name] = None
+
+        result = {
+            'command': 'install',
+            'schema_version': 1,
+            'check': bool(check),
+            'mode': mode,
+            'preset': preset,
+            'context_economy': context_economy,
+            'changed': sorted(changes),
+            'configuration': 'valid',
+        }
+        if check or not changes:
+            return result
+
+        originals, created_dirs, written_names = {}, [], []
+        try:
+            for name in changes:
+                target = safe_path(project / name)
+                originals[name] = target.read_bytes() if target.exists() else None
+            for name, content in changes.items():
+                target = safe_path(project / name)
+                expected = expected_current[name]
+                if expected is None:
+                    if target.exists():
+                        raise ValueError('Install target changed concurrently: ' + name)
+                elif not target.is_file() or target.read_bytes() != expected:
+                    raise ValueError('Install target changed concurrently: ' + name)
+                missing = []
+                parent = target.parent
+                while not parent.exists():
+                    missing.append(parent)
+                    parent = parent.parent
+                for folder in reversed(missing):
+                    folder.mkdir()
+                    created_dirs.append(folder)
+                temporary_target = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+                try:
+                    with temporary_target.open('xb') as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary_target, target)
+                    written_names.append(name)
+                finally:
+                    if temporary_target.exists():
+                        temporary_target.unlink()
+        except BaseException as install_error:
+            rollback_errors = []
+            for name in reversed(written_names):
+                content = originals[name]
+                target = project / name
+                try:
+                    if content is None:
+                        _rollback_remove(project, target)
+                    else:
+                        _rollback_write(project, target, content)
+                except BaseException as rollback_error:
+                    rollback_errors.append(name + ': ' + str(rollback_error))
+            for directory in reversed(created_dirs):
+                try:
+                    _remove_rollback_links(project, directory)
+                    safe_path(directory)
+                    if _path_info(directory) is not None:
+                        directory.rmdir()
+                except BaseException as rollback_error:
+                    rollback_errors.append(
+                        str(directory.relative_to(project)) + ': ' + str(rollback_error)
+                    )
+            if rollback_errors:
+                raise RuntimeError(
+                    'Install failed and rollback could not safely restore all targets: '
+                    + '; '.join(rollback_errors)
+                ) from install_error
+            raise
+        return result
 
 
 def install(master, project, mode='SOLO', preset='balanced', preview=False):
@@ -54,10 +404,15 @@ def _install(master, project, mode, preset, preview):
         raise ValueError('Master and project must be separate directory trees')
     if not project.is_dir(): raise ValueError('Project directory must already exist')
     sources = {}
-    for folder in [master/'template'] + ([master/'coop'] if mode == 'CO-OP' else []):
-        for f in folder.rglob('*'):
-            safe_path(f)
-            if f.is_file(): sources[f.relative_to(folder).as_posix()] = f.read_bytes()
+    source_groups = [(master / 'legacy-template', V1_TEMPLATE_FILES)]
+    if mode == 'CO-OP':
+        source_groups.append((master / 'coop', V1_COOP_FILES))
+    for folder, names in source_groups:
+        for relative in names:
+            source = safe_path(folder / relative)
+            if not source.is_file():
+                raise ValueError('Missing V1 compatibility template file: ' + relative)
+            sources[relative] = source.read_bytes()
     sources['.codex/config.toml'] = (master/f'presets/{preset}/config.toml').read_bytes()
     sources['.multicontroller/policy.json'] = (master/f'presets/{preset}/policy.json').read_bytes()
     team = json.loads(sources['AGENT_TEAM.yml'])
@@ -197,16 +552,22 @@ def validate_project(project, run_checks=False):
                 host_models='requires live smoke test',github_rules='requires remote verification')
 
 
+# Explicit compatibility surface for callers that still need a V1 snapshot.
+install_v1 = install
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('project')
     p.add_argument('--master', default=str(Path(__file__).resolve().parents[1]))
     p.add_argument('--mode', choices=['SOLO','CO-OP'], default='SOLO')
     p.add_argument('--preset', choices=['balanced','critical'], default='balanced')
+    p.add_argument('--context-economy', choices=['off','balanced','aggressive'], default='off')
     p.add_argument('--preview', action='store_true')
     a = p.parse_args()
     try:
-        print(json.dumps(install(Path(a.master), Path(a.project), a.mode, a.preset, a.preview),indent=2))
+        print(json.dumps(install_v2(Path(a.master), Path(a.project), check=a.preview, mode=a.mode,
+                                    preset=a.preset, context_economy=a.context_economy),indent=2))
         return 0
     except (OSError, ValueError, KeyError) as exc:
         print('ERROR: '+str(exc), file=sys.stderr)
