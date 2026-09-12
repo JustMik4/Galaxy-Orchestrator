@@ -1,0 +1,20 @@
+{
+  "adapters": {
+    "codex": "codex-v1",
+    "schema_version": 1
+  },
+  "galaxy": {
+    "source_revision": "release:2.0.0",
+    "version": "2.0.0"
+  },
+  "migration_schema": 1,
+  "project_schema": 1,
+  "schema_version": 1,
+  "specialists": {
+    "catalog_revision": "3cd4556e146f0b2b1b0b05a275a1b394e49497d4d75a0ae97d193e0af5b1c7b4",
+    "names": [],
+    "packs": [
+      "core"
+    ]
+  }
+}

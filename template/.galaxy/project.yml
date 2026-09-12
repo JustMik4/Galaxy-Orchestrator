@@ -1,0 +1,28 @@
+{
+  "adapter": "codex",
+  "name": "project",
+  "schema_version": 1,
+  "specialists": {
+    "names": [],
+    "packs": [
+      "core"
+    ]
+  },
+  "vault": {
+    "enabled": false,
+    "exclude": [
+      "prompts",
+      "responses",
+      "telemetry",
+      "secrets"
+    ],
+    "include": [
+      "tasks",
+      "milestones",
+      "summaries"
+    ],
+    "mode": "projection",
+    "path": ".galaxy/vault",
+    "sync": "manual"
+  }
+}
