@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "files": {
     ".gitattributes": "b976d6e3a72f1c51859a932990823b514864f5ede57338713e46ebc5ff060a75",
-    ".github/workflows/package-tests.yml": "d7393e7a518dc457f2ca692451c7818644f1ef38303f8e5c3914cc1093f68225",
+    ".github/workflows/package-tests.yml": "8ba885423679883aca1ecf9ebcc74bc3bc910f6296d2edde407f5281497d356c",
     ".gitignore": "67a77280dd3d6eb8c241f4daa0d8745680f8942d4001a12a2667806f6c119a20",
     "Iniciar.bat": "6f1f7780961e1f05d579616722340bddcd0787c6f64f74adeffcafd22d08b0af",
     "LICENSE": "c74c88f0e1047a12e3741b97290ea18644eed20ae07e623885631d7dff16da06",
