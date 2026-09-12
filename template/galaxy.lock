@@ -4,7 +4,7 @@
     "schema_version": 1
   },
   "galaxy": {
-    "source_revision": "release:2.0.0",
+    "source_revision": "v2.0.0",
     "version": "2.0.0"
   },
   "migration_schema": 1,

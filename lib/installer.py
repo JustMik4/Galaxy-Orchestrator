@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import uuid
 
@@ -28,6 +29,194 @@ def safe_path(path):
 
 def encoded(value):
     return (json.dumps(value, indent=2, ensure_ascii=False)+'\n').encode('utf-8')
+
+
+V2_TRACKED_FILES = (
+    'AGENTS.md',
+    '.galaxy/project.yml',
+    '.galaxy/team.yml',
+    '.galaxy/checks.json',
+    'galaxy.lock',
+    '.github/workflows/galaxy-validate.yml',
+)
+
+V1_TEMPLATE_FILES = (
+    'AGENT_TEAM.yml',
+    'AGENTS.md',
+    '.agents/skills/multicontroller/SKILL.md',
+    '.agents/skills/multicontroller/references/contract.md',
+    '.agents/skills/multicontroller/references/gates.md',
+    '.agents/skills/multicontroller/references/learning.md',
+    '.agents/skills/multicontroller/references/remote.md',
+    '.codex/config.toml',
+    '.codex/agents/explorer.toml',
+    '.codex/agents/hard-worker.toml',
+    '.codex/agents/researcher.toml',
+    '.codex/agents/reviewer.toml',
+    '.codex/agents/tester.toml',
+    '.codex/agents/worker.toml',
+    '.multicontroller/checks.json',
+    '.multicontroller/examples/control-claim.json',
+    '.multicontroller/examples/control-state.json',
+    '.multicontroller/examples/gate.json',
+    '.multicontroller/examples/grant.json',
+    '.multicontroller/examples/history.json',
+    '.multicontroller/examples/reclaim.json',
+    '.multicontroller/examples/usage.json',
+    '.multicontroller/messages/BLOCKER.md',
+    '.multicontroller/messages/CLAIM-ACK.md',
+    '.multicontroller/messages/CLAIM-GRANT.md',
+    '.multicontroller/messages/CLAIM-REQUEST.md',
+    '.multicontroller/messages/EXECUTION-SUMMARY.md',
+    '.multicontroller/messages/HANDOFF.md',
+    '.multicontroller/messages/INTERFACE-CHANGE.md',
+    '.multicontroller/messages/RELEASE.md',
+    '.multicontroller/messages/REVOKE.md',
+)
+
+V1_COOP_FILES = (
+    '.github/CODEOWNERS',
+    '.github/pull_request_template.md',
+    '.github/ISSUE_TEMPLATE/agent-task.yml',
+    '.github/workflows/multicontroller-control.yml',
+    '.github/workflows/multicontroller.yml',
+)
+
+
+def install_v2(master, project, check=False, mode='SOLO', preset='balanced'):
+    """Install the canonical V2 project snapshot and local Codex projection.
+
+    All bytes are rendered in an isolated staging directory first.  Occupied
+    destinations must match exactly, and any write failure restores the prior
+    project bytes before returning an error.
+    """
+    master, project = safe_path(master), safe_path(project)
+    if master == project or master in project.parents or project in master.parents:
+        raise ValueError('Master and project must be separate directory trees')
+    if not project.is_dir():
+        raise ValueError('Project directory must already exist')
+    if mode not in ('SOLO', 'CO-OP'):
+        raise ValueError('invalid V2 mode')
+    if preset not in ('balanced', 'critical'):
+        raise ValueError('invalid V2 preset')
+
+    with tempfile.TemporaryDirectory(prefix='galaxy-install-') as temporary:
+        stage = Path(temporary)
+        exclude_original = None
+        for name in V2_TRACKED_FILES:
+            source = safe_path(master / 'template' / name)
+            if not source.is_file():
+                raise ValueError('Missing canonical template file: ' + name)
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        team_path = stage / '.galaxy/team.yml'
+        team = json.loads(team_path.read_text(encoding='utf-8'))
+        team['mode'] = mode
+        if mode == 'CO-OP':
+            team['coordination'] = {
+                'automatic_expiry': False,
+                'backend': 'github-actions-issue',
+                'claim_protocol': 'serialized-workflow',
+                'control_issue': None,
+            }
+            team['required_checks'] = ['galaxy / validate']
+        team_path.write_bytes(encoded(team))
+        project_path = stage / '.galaxy/project.yml'
+        project_config = json.loads(project_path.read_text(encoding='utf-8'))
+        project_config['routing'] = {'profile': preset}
+        project_path.write_bytes(encoded(project_config))
+        if (project / '.git').is_dir():
+            exclude = project / '.git/info/exclude'
+            staged_exclude = stage / '.git/info/exclude'
+            staged_exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude_original = exclude.read_bytes() if exclude.is_file() else b''
+            staged_exclude.write_bytes(exclude_original)
+
+        try:
+            from .bootstrap import bootstrap
+        except ImportError:
+            from bootstrap import bootstrap  # type: ignore
+        bootstrap(stage, catalog_root=master / 'specialists')
+        sources = {
+            path.relative_to(stage).as_posix(): path.read_bytes()
+            for path in stage.rglob('*') if path.is_file()
+        }
+        changes = {}
+        expected_current = {}
+        for name, content in sorted(sources.items()):
+            target = safe_path(project / name)
+            if target.exists():
+                if not target.is_file():
+                    raise ValueError('Expected a file: ' + name)
+                current = target.read_bytes()
+                if current != content and name == '.git/info/exclude' and current == exclude_original:
+                    changes[name] = content
+                    expected_current[name] = current
+                elif current != content:
+                    raise ValueError('Existing incompatible managed file; reconcile first: ' + name)
+            else:
+                changes[name] = content
+                expected_current[name] = None
+
+        result = {
+            'command': 'install',
+            'schema_version': 1,
+            'check': bool(check),
+            'mode': mode,
+            'preset': preset,
+            'changed': sorted(changes),
+            'configuration': 'valid',
+        }
+        if check or not changes:
+            return result
+
+        originals, created_dirs, written_names = {}, [], []
+        try:
+            for name in changes:
+                target = safe_path(project / name)
+                originals[name] = target.read_bytes() if target.exists() else None
+            for name, content in changes.items():
+                target = safe_path(project / name)
+                expected = expected_current[name]
+                if expected is None:
+                    if target.exists():
+                        raise ValueError('Install target changed concurrently: ' + name)
+                elif not target.is_file() or target.read_bytes() != expected:
+                    raise ValueError('Install target changed concurrently: ' + name)
+                missing = []
+                parent = target.parent
+                while not parent.exists():
+                    missing.append(parent)
+                    parent = parent.parent
+                for folder in reversed(missing):
+                    folder.mkdir()
+                    created_dirs.append(folder)
+                temporary_target = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+                try:
+                    with temporary_target.open('xb') as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary_target, target)
+                    written_names.append(name)
+                finally:
+                    if temporary_target.exists():
+                        temporary_target.unlink()
+        except BaseException:
+            for name in written_names:
+                content = originals[name]
+                target = project / name
+                if content is None:
+                    if target.is_file():
+                        target.unlink()
+                else:
+                    target.write_bytes(content)
+            for directory in reversed(created_dirs):
+                if directory.exists() and not any(directory.iterdir()):
+                    directory.rmdir()
+            raise
+        return result
 
 
 def install(master, project, mode='SOLO', preset='balanced', preview=False):
@@ -54,10 +243,15 @@ def _install(master, project, mode, preset, preview):
         raise ValueError('Master and project must be separate directory trees')
     if not project.is_dir(): raise ValueError('Project directory must already exist')
     sources = {}
-    for folder in [master/'template'] + ([master/'coop'] if mode == 'CO-OP' else []):
-        for f in folder.rglob('*'):
-            safe_path(f)
-            if f.is_file(): sources[f.relative_to(folder).as_posix()] = f.read_bytes()
+    source_groups = [(master / 'legacy-template', V1_TEMPLATE_FILES)]
+    if mode == 'CO-OP':
+        source_groups.append((master / 'coop', V1_COOP_FILES))
+    for folder, names in source_groups:
+        for relative in names:
+            source = safe_path(folder / relative)
+            if not source.is_file():
+                raise ValueError('Missing V1 compatibility template file: ' + relative)
+            sources[relative] = source.read_bytes()
     sources['.codex/config.toml'] = (master/f'presets/{preset}/config.toml').read_bytes()
     sources['.multicontroller/policy.json'] = (master/f'presets/{preset}/policy.json').read_bytes()
     team = json.loads(sources['AGENT_TEAM.yml'])
@@ -195,6 +389,10 @@ def validate_project(project, run_checks=False):
             if result.returncode: raise ValueError('Product check failed with exit '+str(result.returncode))
     return dict(mode=mode,preset=policy['preset'],configuration='valid',product_checks='passed' if run_checks else 'not_run',
                 host_models='requires live smoke test',github_rules='requires remote verification')
+
+
+# Explicit compatibility surface for callers that still need a V1 snapshot.
+install_v1 = install
 
 
 def main():

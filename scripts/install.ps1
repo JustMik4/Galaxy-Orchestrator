@@ -8,9 +8,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $masterPath = Split-Path -Parent $PSScriptRoot
-$installArgs = @((Join-Path $masterPath 'lib/installer.py'), $ProjectPath, '--master', $masterPath, '--mode', $Mode, '--preset', $Preset)
-if (-not $PSCmdlet.ShouldProcess($ProjectPath, "Install Multicontroller $Mode/$Preset snapshot")) {
-    $installArgs += '--preview'
+$installArgs = @(
+    (Join-Path $masterPath 'galaxy.py'), 'install', $ProjectPath,
+    '--mode', $Mode, '--preset', $Preset
+)
+if (-not $PSCmdlet.ShouldProcess($ProjectPath, 'Install Galaxy Orchestrator V2 project')) {
+    $installArgs += '--check'
 }
 & $Python @installArgs
-if ($LASTEXITCODE -ne 0) { throw "Multicontroller installer failed (exit $LASTEXITCODE)." }
+if ($LASTEXITCODE -ne 0) { throw "Galaxy Orchestrator installer failed (exit $LASTEXITCODE)." }

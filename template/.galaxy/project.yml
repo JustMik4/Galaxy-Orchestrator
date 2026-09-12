@@ -1,6 +1,9 @@
 {
   "adapter": "codex",
   "name": "project",
+  "routing": {
+    "profile": "balanced"
+  },
   "schema_version": 1,
   "specialists": {
     "names": [],

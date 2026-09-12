@@ -1,0 +1,54 @@
+name: galaxy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Run the exact Galaxy version from galaxy.lock
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $sourceUrl = 'https://github.com/JustMik4/Galaxy-Orchestrator'
+          $lockPath = Join-Path $env:GITHUB_WORKSPACE 'galaxy.lock'
+          $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+          $version = [string]$lock.galaxy.version
+          $revision = [string]$lock.galaxy.source_revision
+          $semver = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          if ($version -notmatch $semver) {
+            throw 'galaxy.lock version must be an exact semantic version'
+          }
+          $isSha = $revision -match '^[0-9a-fA-F]{40}$'
+          $isTag = $revision -eq "v$version"
+          if (-not ($isSha -or $isTag)) {
+            throw 'galaxy.lock source_revision must be an exact 40-hex SHA or the exact version tag'
+          }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'galaxy-source'
+          New-Item -ItemType Directory -Path $toolRoot | Out-Null
+          & git init --quiet $toolRoot
+          & git -C $toolRoot remote add origin $sourceUrl
+          if ($isSha) {
+            & git -C $toolRoot fetch --quiet --depth 1 origin $revision
+            & git -C $toolRoot checkout --quiet --detach FETCH_HEAD
+            $actual = (& git -C $toolRoot rev-parse HEAD).Trim()
+            if ($actual -ine $revision) {
+              throw 'fetched Galaxy SHA does not match galaxy.lock source_revision'
+            }
+          } else {
+            $refspec = "refs/tags/${revision}:refs/tags/${revision}"
+            & git -C $toolRoot fetch --quiet --depth 1 origin $refspec
+            & git -C $toolRoot checkout --quiet --detach "refs/tags/${revision}^{commit}"
+          }
+          & py -3.11 (Join-Path $toolRoot 'galaxy.py') validate $env:GITHUB_WORKSPACE --gate

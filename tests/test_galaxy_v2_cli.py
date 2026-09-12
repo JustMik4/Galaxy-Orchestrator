@@ -1,0 +1,464 @@
+import json
+import os
+import io
+from contextlib import redirect_stdout
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from lib import galaxy as galaxy_cli
+from lib import installer
+from tests.migrations.test_v1_3_to_v2_0 import MigrationFixture
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class GalaxyV2CliTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="galaxy cli ")
+        self.addCleanup(self.temporary.cleanup)
+        self.project = Path(self.temporary.name) / "existing project"
+        self.project.mkdir()
+
+    def run_cli(self, *arguments):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "galaxy.py"), *map(str, arguments)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def workflow_run_steps(self):
+        lines = (ROOT / "template/.github/workflows/galaxy-validate.yml").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        steps = []
+        index = 0
+        while index < len(lines):
+            stripped = lines[index].lstrip()
+            indent = len(lines[index]) - len(stripped)
+            if stripped in ("- run: |", "run: |"):
+                content_indent = indent + (4 if stripped.startswith("-") else 2)
+                body = []
+                index += 1
+                while index < len(lines):
+                    candidate = lines[index]
+                    candidate_indent = len(candidate) - len(candidate.lstrip())
+                    if candidate.strip() and candidate_indent <= indent:
+                        break
+                    body.append(candidate[content_indent:] if candidate.strip() else "")
+                    index += 1
+                steps.append("\n".join(body) + "\n")
+                continue
+            index += 1
+        return steps
+
+    def test_install_creates_canonical_layout_without_v1_pollution(self):
+        result = self.run_cli("install", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "install")
+        for relative in (
+            "AGENTS.md",
+            ".galaxy/project.yml",
+            ".galaxy/team.yml",
+            ".galaxy/checks.json",
+            "galaxy.lock",
+            ".github/workflows/galaxy-validate.yml",
+            ".codex/config.toml",
+            ".codex/agents/worker.toml",
+            ".codex/skills/core/SKILL.md",
+        ):
+            self.assertTrue((self.project / relative).is_file(), relative)
+        for relative in (
+            "AGENT_TEAM.yml",
+            ".multicontroller",
+            ".agents/skills/multicontroller",
+            ".multicontroller/tools",
+        ):
+            self.assertFalse((self.project / relative).exists(), relative)
+        config = (self.project / ".codex/config.toml").read_text(encoding="utf-8")
+        self.assertIn('model = "gpt-5.6-sol"', config)
+        self.assertIn('model_reasoning_effort = "medium"', config)
+
+    def test_init_alias_installs_default_solo_project(self):
+        result = self.run_cli("init", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "init")
+        team = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
+        self.assertEqual(team["mode"], "SOLO")
+        self.assertTrue((self.project / ".codex/config.toml").is_file())
+
+    def test_coop_install_renders_canonical_coordination_without_v1_runtime(self):
+        result = self.run_cli("install", self.project, "--mode", "CO-OP")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        team_path = self.project / ".galaxy/team.yml"
+        team = json.loads(team_path.read_text(encoding="utf-8"))
+        self.assertEqual(team["mode"], "CO-OP")
+        self.assertEqual(team["coordination"], {
+            "automatic_expiry": False,
+            "backend": "github-actions-issue",
+            "claim_protocol": "serialized-workflow",
+            "control_issue": None,
+        })
+        self.assertEqual(team["required_checks"], ["galaxy / validate"])
+        for relative in (
+            ".multicontroller", "AGENT_TEAM.yml",
+            ".github/workflows/multicontroller.yml",
+            ".github/workflows/multicontroller-control.yml",
+        ):
+            self.assertFalse((self.project / relative).exists(), relative)
+
+        before = team_path.read_bytes()
+        mismatch = self.run_cli("install", self.project, "--check")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("incompatible", mismatch.stderr)
+        self.assertEqual(team_path.read_bytes(), before)
+
+    def test_critical_preset_is_declarative_and_keeps_root_sol_medium(self):
+        result = self.run_cli("install", self.project, "--preset", "critical")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        project_path = self.project / ".galaxy/project.yml"
+        declaration = json.loads(project_path.read_text(encoding="utf-8"))
+        self.assertEqual(declaration["routing"]["profile"], "critical")
+        config = (self.project / ".codex/config.toml").read_text(encoding="utf-8")
+        self.assertIn('model = "gpt-5.6-sol"', config)
+        self.assertIn('model_reasoning_effort = "medium"', config)
+
+        before = project_path.read_bytes()
+        mismatch = self.run_cli("install", self.project, "--check")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("incompatible", mismatch.stderr)
+        self.assertEqual(project_path.read_bytes(), before)
+
+    def test_second_install_and_bootstrap_check_are_deterministic_and_read_only(self):
+        first = self.run_cli("install", self.project)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        before = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        second = self.run_cli("install", self.project)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(json.loads(second.stdout)["changed"], [])
+        check = self.run_cli("bootstrap", self.project, "--check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        payload = json.loads(check.stdout)
+        self.assertEqual(payload["command"], "bootstrap")
+        self.assertFalse(payload["applied"])
+        after = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        self.assertEqual(before, after)
+
+    def test_validate_reports_configuration_and_runs_explicit_gate(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        checks = self.project / ".galaxy/checks.json"
+        checks.write_text(json.dumps({
+            "schema_version": 1,
+            "commands": [[sys.executable, "-c", "pass"]],
+        }), encoding="utf-8")
+
+        result = self.run_cli("validate", self.project, "--gate")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "validate")
+        self.assertEqual(payload["configuration"], "valid")
+        self.assertEqual(payload["product_checks"], "passed")
+
+    def test_doctor_json_uses_stable_report_and_exit_code(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        checks = self.project / ".galaxy/checks.json"
+        checks.write_text(json.dumps({
+            "schema_version": 1,
+            "commands": [[sys.executable, "-c", "pass"]],
+        }), encoding="utf-8")
+
+        result = self.run_cli("doctor", self.project, "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "doctor")
+        self.assertEqual(payload["exit_code"], 0)
+        self.assertIn(payload["status"], ("PASS", "WARN"))
+        self.assertIsInstance(payload["checks"], list)
+
+    def test_migration_preview_has_no_project_writes(self):
+        MigrationFixture(self.project)
+        before = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+
+        result = self.run_cli("migrate", self.project, "--preview")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "migrate")
+        self.assertTrue(payload["preview"])
+        self.assertTrue(payload["ready"])
+        after = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        self.assertEqual(before, after)
+
+    def test_cleanup_preview_reports_targets_without_mutation(self):
+        subprocess.run(["git", "init", "-b", "main"], cwd=self.project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.project, check=True)
+        subprocess.run(["git", "config", "user.name", "Galaxy Test"], cwd=self.project, check=True)
+        marker = self.project / "README.md"
+        marker.write_text("fixture\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=self.project, check=True)
+        subprocess.run(["git", "commit", "-m", "fixture"], cwd=self.project, check=True, capture_output=True)
+        stale = self.project / ".galaxy/runtime/old.tmp"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("cache", encoding="utf-8")
+        old = 1_600_000_000
+        os.utime(stale, (old, old))
+
+        result = self.run_cli("cleanup", self.project, "--preview")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "cleanup")
+        self.assertFalse(payload["applied"])
+        self.assertIn(".galaxy/runtime/old.tmp", payload["targets"]["runtime"])
+        self.assertTrue(stale.is_file())
+
+    def test_vault_status_is_disabled_and_read_only_by_default(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        before = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+
+        result = self.run_cli("vault", "status", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "vault status")
+        self.assertFalse(payload["enabled"])
+        self.assertIsNone(payload["path"])
+        after = {
+            path.relative_to(self.project).as_posix(): path.read_bytes()
+            for path in self.project.rglob("*") if path.is_file()
+        }
+        self.assertEqual(before, after)
+
+    def test_vault_sync_uses_explicit_snapshot_and_configured_path(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        config_path = self.project / ".galaxy/project.yml"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["vault"].update(enabled=True, path=".galaxy/obsidian")
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        snapshots = Path(self.temporary.name) / "snapshots.json"
+        snapshots.write_text(json.dumps([{
+            "task_id": "T-9",
+            "title": "Integrate CLI",
+            "status": "complete",
+            "revision": 1,
+            "prompt": "must not be exported",
+        }]), encoding="utf-8")
+
+        result = self.run_cli("vault", "sync", self.project, "--snapshot", snapshots)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "vault sync")
+        self.assertTrue(payload["enabled"])
+        note = self.project / ".galaxy/obsidian/tasks/T-9.md"
+        self.assertTrue(note.is_file())
+        self.assertNotIn("must not be exported", note.read_text(encoding="utf-8"))
+
+    def test_specialists_list_is_cold_and_does_not_read_bodies(self):
+        real_read_text = Path.read_text
+
+        def refuse_specialist_body(path, *args, **kwargs):
+            if path.name == "SKILL.md":
+                raise AssertionError("cold list loaded a specialist body")
+            return real_read_text(path, *args, **kwargs)
+
+        output = io.StringIO()
+        with patch.object(Path, "read_text", refuse_specialist_body), redirect_stdout(output):
+            code = galaxy_cli.main(["specialists", "list"])
+        self.assertEqual(code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["command"], "specialists list")
+        self.assertEqual(payload["specialists"], [
+            "core", "git", "github-actions", "python-debugging",
+            "python-testing", "windows-powershell",
+        ])
+
+    def test_specialists_sync_materializes_the_declared_hot_set(self):
+        install = self.run_cli("install", self.project)
+        self.assertEqual(install.returncode, 0, install.stderr)
+        skill = self.project / ".codex/skills/core/SKILL.md"
+        skill.unlink()
+        skill.parent.rmdir()
+
+        result = self.run_cli("specialists", "sync", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "specialists sync")
+        self.assertIn(".codex/skills/core/SKILL.md", payload["written"])
+        self.assertTrue(skill.is_file())
+
+    def test_v1_installer_remains_available_through_explicit_compatibility_api(self):
+        result = installer.install_v1(ROOT, self.project)
+        self.assertEqual(result["mode"], "SOLO")
+        self.assertTrue((self.project / "AGENT_TEAM.yml").is_file())
+        self.assertTrue((self.project / ".multicontroller/tools/multicontroller.py").is_file())
+
+    def test_v1_compatibility_install_is_not_a_hybrid_v2_project(self):
+        installer.install_v1(ROOT, self.project)
+        for relative in (
+            ".galaxy", "galaxy.lock", ".github/workflows/galaxy-validate.yml",
+        ):
+            self.assertFalse((self.project / relative).exists(), relative)
+        instructions = (self.project / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Project instructions — Multicontroller V1", instructions)
+        self.assertNotIn("Galaxy Orchestrator project instructions", instructions)
+        self.assertIn(".multicontroller/policy.json", instructions)
+
+    def test_powershell_install_wrapper_routes_to_canonical_cli(self):
+        if subprocess.run(["pwsh", "-NoProfile", "-Command", "$PSVersionTable.PSVersion"],
+                          capture_output=True).returncode:
+            self.skipTest("PowerShell unavailable")
+        arguments = [
+            "pwsh", "-NoProfile", "-File", str(ROOT / "scripts/install.ps1"),
+            "-ProjectPath", str(self.project),
+        ]
+        preview = subprocess.run(arguments + ["-WhatIf"], text=True, capture_output=True, check=False)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertEqual(list(self.project.iterdir()), [])
+        result = subprocess.run(arguments, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["command"], "install")
+        self.assertTrue((self.project / ".galaxy/project.yml").is_file())
+        self.assertFalse((self.project / "AGENT_TEAM.yml").exists())
+
+    def test_powershell_install_passes_mode_and_preset_to_canonical_cli(self):
+        if subprocess.run(["pwsh", "-NoProfile", "-Command", "$PSVersionTable.PSVersion"],
+                          capture_output=True).returncode:
+            self.skipTest("PowerShell unavailable")
+        result = subprocess.run([
+            "pwsh", "-NoProfile", "-File", str(ROOT / "scripts/install.ps1"),
+            "-ProjectPath", str(self.project), "-Mode", "CO-OP",
+            "-Preset", "critical",
+        ], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        team = json.loads((self.project / ".galaxy/team.yml").read_text(encoding="utf-8"))
+        project = json.loads((self.project / ".galaxy/project.yml").read_text(encoding="utf-8"))
+        self.assertEqual(team["mode"], "CO-OP")
+        self.assertEqual(project["routing"]["profile"], "critical")
+
+        update = subprocess.run([
+            "pwsh", "-NoProfile", "-File", str(ROOT / "scripts/update.ps1"),
+            "-ProjectPath", str(self.project),
+        ], text=True, capture_output=True, check=False)
+        self.assertEqual(update.returncode, 0, update.stderr)
+        self.assertEqual(json.loads(update.stdout)["changed"], [])
+
+    def test_install_preserves_git_exclude_and_adds_only_local_policy(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        exclude = self.project / ".git/info/exclude"
+        exclude.write_text("user-local.txt\n", encoding="utf-8")
+
+        result = self.run_cli("install", self.project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        policy = exclude.read_text(encoding="utf-8")
+        self.assertIn("user-local.txt\n", policy)
+        for relative in (
+            ".codex/", ".galaxy/local/", ".galaxy/runtime/",
+            ".galaxy/cache/", ".galaxy/install/",
+        ):
+            self.assertIn(relative, policy)
+        self.assertNotIn(".agents/", policy)
+
+    def test_top_level_help_lists_canonical_and_legacy_commands(self):
+        result = self.run_cli("--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for command in (
+            "install", "bootstrap", "migrate", "validate", "doctor",
+            "specialists", "cleanup", "vault", "decide", "gate", "reclaim",
+        ):
+            self.assertIn(command, result.stdout)
+
+    def test_v2_install_refuses_concurrent_file_and_preserves_it(self):
+        real_safe_path = installer.safe_path
+        target = self.project / "AGENTS.md"
+        resolutions = 0
+
+        def interleaved(value):
+            nonlocal resolutions
+            resolved = real_safe_path(value)
+            if resolved == target:
+                resolutions += 1
+                if resolutions == 3:
+                    target.write_text("concurrent user rules\n", encoding="utf-8")
+            return resolved
+
+        with patch.object(installer, "safe_path", side_effect=interleaved):
+            with self.assertRaisesRegex(ValueError, "changed concurrently"):
+                installer.install_v2(ROOT, self.project)
+        self.assertEqual(target.read_text(encoding="utf-8"), "concurrent user rules\n")
+        self.assertEqual(
+            [path.name for path in self.project.iterdir()],
+            ["AGENTS.md"],
+        )
+
+    def test_workflow_fetches_and_runs_exact_galaxy_lock_source(self):
+        workflow = (ROOT / "template/.github/workflows/galaxy-validate.yml").read_text(
+            encoding="utf-8"
+        )
+        run_steps = self.workflow_run_steps()
+        self.assertEqual(len(run_steps), 1)
+        script = run_steps[0]
+        self.assertNotEqual(script.strip(), "galaxy validate . --gate")
+        for required in (
+            "https://github.com/JustMik4/Galaxy-Orchestrator",
+            "galaxy.lock", "source_revision", "version",
+            "^[0-9a-fA-F]{40}$", "FETCH_HEAD", "rev-parse", "galaxy.py",
+            "validate", "--gate",
+        ):
+            self.assertIn(required, script)
+        self.assertIn("shell: pwsh", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+
+        parser = subprocess.run(
+            [
+                "pwsh", "-NoProfile", "-Command",
+                "$tokens=$null;$errors=$null;"
+                "[System.Management.Automation.Language.Parser]::ParseInput("
+                "$env:GALAXY_WORKFLOW_SCRIPT,[ref]$tokens,[ref]$errors)|Out-Null;"
+                "if($errors.Count){$errors|ForEach-Object Message;exit 1}",
+            ],
+            env={**os.environ, "GALAXY_WORKFLOW_SCRIPT": script},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(parser.returncode, 0, parser.stdout + parser.stderr)
+
+        (self.project / "galaxy.lock").write_text(json.dumps({
+            "galaxy": {"version": "2.0.0", "source_revision": "main; whoami"},
+        }), encoding="utf-8")
+        executed = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", script],
+            env={**os.environ, "GITHUB_WORKSPACE": str(self.project)},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(executed.returncode, 0)
+        self.assertIn("source_revision", executed.stderr)
+
+        lock = json.loads((ROOT / "template/galaxy.lock").read_text(encoding="utf-8"))
+        self.assertEqual(lock["galaxy"]["source_revision"], "v2.0.0")
+
+
+if __name__ == "__main__":
+    unittest.main()
