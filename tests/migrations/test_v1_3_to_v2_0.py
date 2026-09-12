@@ -459,6 +459,21 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
         self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
 
+    def test_success_rollback_restores_preexisting_bootstrap_state_exactly(self):
+        _git(self.project, "init", "-q")
+        _git(self.project, "add", ".")
+        state = self.project / ".galaxy/install/bootstrap-state.json"
+        state.parent.mkdir(parents=True)
+        state.write_bytes(b'{"schema_version":0,"local":"preserve exactly"}\r\n')
+        before = self.snapshot()
+        before_index = (self.project / ".git/index").read_bytes()
+
+        receipt = apply(self.master, self.project)
+        rollback(self.master, self.project, receipt["receipt_path"])
+
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(before_index, (self.project / ".git/index").read_bytes())
+
     def test_doctor_failure_rolls_back_with_truthful_phase_statuses(self):
         unmanaged = self.project / ".codex/project-owned.txt"
         unmanaged.write_bytes(b"must remain tracked and unchanged\n")

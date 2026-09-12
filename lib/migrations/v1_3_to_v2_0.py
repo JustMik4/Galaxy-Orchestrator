@@ -611,7 +611,7 @@ def apply(
         receipt[active_phase] = {"status": "passed"}
         persist_receipt()
 
-        from lib.bootstrap import bootstrap, bootstrap_plan
+        from lib.bootstrap import BOOTSTRAP_STATE_RELATIVE, bootstrap, bootstrap_plan
 
         active_phase = "bootstrap"
         receipt[active_phase] = {"status": "running"}
@@ -622,7 +622,7 @@ def apply(
         bootstrap_preview = bootstrap_plan(project, catalog_root=catalog_root)
         bootstrap_targets = [
             relative for relative, _content in bootstrap_preview.artifacts
-        ] + list(bootstrap_preview.remove)
+        ] + list(bootstrap_preview.remove) + [BOOTSTRAP_STATE_RELATIVE]
         extend_backup(backup, project, state, bootstrap_targets)
         bootstrap_result = bootstrap(project, catalog_root=catalog_root)
         receipt["bootstrap"] = {
