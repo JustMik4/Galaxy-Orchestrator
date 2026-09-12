@@ -58,7 +58,9 @@ class CapabilityCatalog:
             by_pair[entry.route.pair] = entry
         self._configured = by_pair
         if observed_pairs is None:
-            observed = set(by_pair)
+            # Configuration is not host telemetry.  An omitted observation
+            # set therefore means that no route has been verified yet.
+            observed = set()
         else:
             observed = {
                 value.pair if isinstance(value, Route) else tuple(value)

@@ -6,6 +6,7 @@ counts are intentionally not accepted as a proxy for subscription quota.
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 
 
 class QuotaState(str, Enum):
@@ -43,7 +44,10 @@ class QuotaSnapshot:
             ("weekly_remaining", self.weekly_remaining),
         ):
             if value is not None and (
-                isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 <= value <= 100
             ):
                 raise ValueError(f"{name} must be a percentage from 0 to 100 or None")
 
@@ -81,12 +85,23 @@ class QuotaPolicy:
             if any(
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
+                or not math.isfinite(value)
                 or not 0 <= value <= 100
                 for value in (warn, economy, stop)
             ):
                 raise ValueError("quota thresholds must be percentages from 0 to 100")
             if not warn >= economy >= stop:
                 raise ValueError(f"{prefix} thresholds must satisfy warn >= economy >= stop")
+        for name in (
+            "enabled",
+            "check_before_dispatch",
+            "check_before_retry",
+            "check_before_escalation",
+            "check_before_expensive_review",
+            "interrupt_running_agent",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean")
 
 
 @dataclass(frozen=True)

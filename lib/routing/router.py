@@ -2,13 +2,12 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
 
 from .catalog import CapabilityCatalog, ModelCapability, Route
-
-if TYPE_CHECKING:
-    from lib.quota import QuotaGuard, QuotaSnapshot
+from lib.quota import QuotaGuard, QuotaSnapshot
+from lib.operator import load_operator_quota_guard
 
 
 class FailureClass(str, Enum):
@@ -157,9 +156,18 @@ class CapabilityRouter:
         self,
         catalog: CapabilityCatalog,
         emergency_policy: EmergencyPolicy | None = None,
+        quota_guard: QuotaGuard | None = None,
+        operator_config: str | Path | None = None,
     ) -> None:
         self.catalog = catalog
         self.emergency_policy = emergency_policy or EmergencyPolicy()
+        if quota_guard is not None and operator_config is not None:
+            raise ValueError("provide quota_guard or operator_config, not both")
+        self.quota_guard = (
+            quota_guard
+            if quota_guard is not None
+            else load_operator_quota_guard(operator_config)
+        )
 
     def route(
         self,
@@ -167,6 +175,7 @@ class CapabilityRouter:
         *,
         quota_guard: "QuotaGuard | None" = None,
     ) -> RoutingDecision:
+        effective_guard = quota_guard or self.quota_guard
         if request.failure_class in self._NO_PROMOTION:
             return RoutingDecision(
                 RoutingAction.BLOCKED,
@@ -197,8 +206,8 @@ class CapabilityRouter:
                 request.failure_class,
             )
         if request.emergency:
-            return self._emergency(request, quota_guard)
-        return self._normal(request, quota_guard)
+            return self._emergency(request, effective_guard)
+        return self._normal(request, effective_guard)
 
     def _requirement(self, request: RoutingRequest) -> int:
         if request.required_capability is not None:
@@ -234,10 +243,9 @@ class CapabilityRouter:
         quota_guard: "QuotaGuard | None",
         operation: str,
     ) -> RoutingDecision | None:
-        if quota_guard is None or request.quota_snapshot is None:
-            return None
+        snapshot = request.quota_snapshot or QuotaSnapshot(None, None)
         quota = quota_guard.evaluate(
-            request.quota_snapshot,
+            snapshot,
             operation,
             expensive=candidate.expected_cost >= 7,
             frontier=candidate.frontier,
@@ -331,6 +339,6 @@ class CapabilityRouter:
                 previous_route=request.previous_route,
                 selected_route=candidate.route,
                 normal_next_route_skipped="emergency policy selected an evidence-based intermediate route",
-                quota_snapshot=request.quota_snapshot,
+                quota_snapshot=request.quota_snapshot or QuotaSnapshot(None, None),
             ),
         )

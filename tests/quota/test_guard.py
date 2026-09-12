@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+import tempfile
 
 from lib.quota import (
     QuotaGuard,
@@ -8,6 +10,7 @@ from lib.quota import (
     QuotaState,
     UnknownTelemetryPolicy,
 )
+from lib.operator import load_operator_policy
 
 
 class QuotaGuardTests(unittest.TestCase):
@@ -83,6 +86,37 @@ class QuotaGuardTests(unittest.TestCase):
             QuotaSnapshot(101, 50)
         with self.assertRaises(ValueError):
             QuotaPolicy(five_hour_warn=10, five_hour_economy=20)
+
+
+class OperatorPolicyTests(unittest.TestCase):
+    def test_local_operator_policy_is_read_only_and_customizable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "operator.toml"
+            path.write_text(
+                "[quota_guard]\n"
+                "five_hour_stop = 10\n"
+                "weekly_stop = 1\n"
+                'unknown_telemetry = "block_all"\n',
+                encoding="utf-8",
+            )
+            before = path.read_bytes()
+            policy = load_operator_policy(path)
+            self.assertEqual(policy.five_hour_stop, 10)
+            self.assertEqual(policy.weekly_stop, 1)
+            self.assertEqual(policy.unknown_telemetry, UnknownTelemetryPolicy.BLOCK_ALL)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_malformed_operator_policy_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "operator.toml"
+            path.write_text(
+                "[quota_guard]\n"
+                "five_hour_stop = 101\n"
+                "token = \"must not be accepted\"\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                load_operator_policy(path)
 
 
 if __name__ == "__main__":

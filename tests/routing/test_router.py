@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+import tempfile
 
 from lib.quota import QuotaGuard, QuotaSnapshot
 from lib.routing import (
@@ -24,6 +26,13 @@ def capability(model, effort, capability, cost, *, frontier=False):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_missing_observations_leave_configured_pairs_unavailable(self):
+        route = capability("astra", "medium", 6, 10, frontier=True)
+        catalog = CapabilityCatalog([route])
+        self.assertEqual(catalog.observed_pairs, frozenset())
+        self.assertEqual(catalog.available(), ())
+        self.assertFalse(catalog.supports(route.route))
+
     def test_only_configured_and_observed_pairs_are_dispatchable(self):
         entries = [
             capability("luna", "medium", 2, 1),
@@ -66,6 +75,40 @@ class RouterTests(unittest.TestCase):
         )
         self.assertEqual(decision.route, Route("terra", "medium"))
         self.assertEqual(decision.action, RoutingAction.DISPATCH)
+
+    def test_missing_quota_snapshot_blocks_expensive_observed_route(self):
+        astra = capability("astra", "medium", 6, 10, frontier=True)
+        router = CapabilityRouter(CapabilityCatalog([astra], [astra.route]))
+        decision = router.route(
+            RoutingRequest(required_capability=6, frontier_reason="verified need")
+        )
+        self.assertEqual(decision.action, RoutingAction.BLOCKED_QUOTA)
+        self.assertEqual(decision.quota_state, "unknown")
+
+    def test_missing_observation_blocks_even_when_route_is_configured(self):
+        astra = capability("astra", "medium", 6, 10, frontier=True)
+        router = CapabilityRouter(CapabilityCatalog([astra]))
+        decision = router.route(
+            RoutingRequest(required_capability=6, frontier_reason="verified need")
+        )
+        self.assertEqual(decision.action, RoutingAction.BLOCKED)
+        self.assertEqual(decision.failure_class, FailureClass.CAPABILITY_MISSING)
+
+    def test_router_uses_custom_local_operator_quota_policy(self):
+        bounded = capability("luna", "medium", 2, 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "operator.toml"
+            config.write_text(
+                "[quota_guard]\nunknown_telemetry = \"block_all\"\n",
+                encoding="utf-8",
+            )
+            router = CapabilityRouter(
+                CapabilityCatalog([bounded], [bounded.route]),
+                operator_config=config,
+            )
+            decision = router.route(RoutingRequest(required_capability=1))
+        self.assertEqual(decision.action, RoutingAction.BLOCKED_QUOTA)
+        self.assertEqual(decision.quota_state, "unknown")
 
     def test_profiles_change_policy_without_using_unsupported_pairs(self):
         economy = self.router.route(

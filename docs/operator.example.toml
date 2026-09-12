@@ -1,3 +1,18 @@
 operator_id = "operator-one"
 machine_id = "pc-one"
 # Public operational identity only; never login/password/token.
+
+[quota_guard]
+enabled = true
+five_hour_warn = 30
+five_hour_economy = 20
+five_hour_stop = 15
+weekly_warn = 8
+weekly_economy = 5
+weekly_stop = 2
+check_before_dispatch = true
+check_before_retry = true
+check_before_escalation = true
+check_before_expensive_review = true
+interrupt_running_agent = true
+unknown_telemetry = "block_expensive"
