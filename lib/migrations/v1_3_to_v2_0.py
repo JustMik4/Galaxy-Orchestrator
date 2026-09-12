@@ -511,6 +511,8 @@ def apply(
         active_phase = "doctor"
         receipt[active_phase] = {"status": "running"}
         doctor_result = doctor(project) if doctor is not None else _default_doctor(project)
+        if isinstance(doctor_result, Mapping):
+            receipt[active_phase] = dict(doctor_result)
         receipt["doctor"] = normalize_check_result(doctor_result, "doctor")
         receipt["status"] = "success"
         receipt["ended_at"] = utc_now()

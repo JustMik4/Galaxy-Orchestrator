@@ -250,6 +250,15 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(receipt["validation"]["status"], "passed")
         self.assertEqual(receipt["git"]["status"], "passed")
         self.assertEqual(receipt["doctor"]["status"], "failed")
+        self.assertEqual(receipt["doctor"]["engine"], "lib.doctor.run_doctor")
+        self.assertEqual(receipt["doctor"]["exit_code"], 1)
+        self.assertEqual(receipt["doctor"]["report_status"], "FAIL")
+        self.assertEqual(receipt["doctor"]["accepted_failures"], [])
+        failed_checks = {
+            item["id"] for item in receipt["doctor"]["report"]["checks"]
+            if item["status"] == "FAIL"
+        }
+        self.assertIn("tracked-generated", failed_checks)
 
     def test_mid_untrack_failure_restores_exact_state_and_does_not_blame_doctor(self):
         _git(self.project, "init", "-q")
