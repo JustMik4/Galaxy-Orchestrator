@@ -36,7 +36,9 @@ class ResourceCatalog:
     def from_mapping(cls, value: object) -> "ResourceCatalog":
         if not isinstance(value, dict) or set(value) != {"schema_version", "resources"}:
             raise ResourceValidationError("catalog requires only schema_version and resources")
-        if value["schema_version"] != 1 or not isinstance(value["resources"], list):
+        if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+            raise ResourceValidationError("unsupported resource catalog schema")
+        if not isinstance(value["resources"], list):
             raise ResourceValidationError("unsupported resource catalog schema")
         return cls(Resource.from_mapping(item) for item in value["resources"])
 
