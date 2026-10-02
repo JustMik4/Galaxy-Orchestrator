@@ -94,9 +94,9 @@ O modo preserva as garantias V1 de um escritor por escopo, revisão independente
 
 ## Modelos, routing e quota
 
-O adaptador Codex gerado usa **Sol Medium** (`gpt-5.6-sol`, esforço `medium`) para o root normal. As configurações dos subagentes por papel definem apenas sandbox e autoridade; não fixam modelo nem esforço. O modelo/esforço de cada subagente vem exclusivamente da autorização operacional. Astra é rota excepcional para problemas que exigem capacidade adicional, não root permanente.
+O adaptador Codex gerado usa **GPT-6.1 Sol Medium** (`gpt-6.1-sol`, esforço `medium`) para o root normal. As configurações dos subagentes por papel definem apenas sandbox e autoridade; não fixam modelo nem esforço. O modelo/esforço de cada subagente vem exclusivamente da autorização operacional. GPT-6 Luna atende trabalho focado e econômico; GPT-6 Astra é rota excepcional para problemas que exigem capacidade adicional, não root permanente.
 
-O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`economy`, `balanced`, `quality` ou `critical`), disponibilidade observada e quota. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
+O Capability Router escolhe a rota mais barata que satisfaz capacidade, autoridade, evidência, perfil (`economy`, `balanced`, `quality` ou `critical`), disponibilidade observada e quota. Em empate exato de custo e capacidade, ele prefere `gpt-6.1-sol` e depois os demais modelos GPT-6. O Runtime Verifier compara modelo/esforço solicitado com o observado e separa mismatch de roteamento de falha do modelo. A identidade efetiva, e não apenas a pedida, alimenta evidência e telemetria.
 
 O Quota Guard reserva por padrão 15% da janela de cinco horas e 2% da janela semanal. Abaixo do piso não inicia novos despachos; interrupção de filhos já em execução é apenas best effort. Limiares são política local do operador e não devem ser gravados no repositório do produto. Se a telemetria não estiver disponível, o Doctor informa `UNKNOWN`; disponibilidade desconhecida não equivale a quota infinita.
 

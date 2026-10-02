@@ -11,7 +11,7 @@ else:
 
 
 def event(n=1, **kw):
-    value = dict(task='42', attempt_id=str(n), agent_id='a', model='gpt-5.6-luna',
+    value = dict(task='42', attempt_id=str(n), agent_id='a', model='gpt-6-luna',
                  effort='medium', result='failed', failure_class='implementation', signature='atomicity')
     value.update(kw)
     return value
@@ -39,14 +39,20 @@ class CoreTests(unittest.TestCase):
         history = [event(failure_class='context-insufficient')]
         decision = mc.decide(history)
         self.assertEqual(decision['action'], 'fresh_agent')
-        self.assertEqual((decision['model'], decision['effort']), ('gpt-5.6-luna', 'medium'))
+        self.assertEqual((decision['model'], decision['effort']), ('gpt-6-luna', 'medium'))
         from datetime import datetime, timezone
         history[0]['timestamp'] = datetime.now(timezone.utc).isoformat()
         self.assertEqual(mc.reputation(history), [])
 
     def test_reasoning_and_complexity_escalate_differently(self):
-        self.assertEqual(mc.decide([event(failure_class='reasoning')])['model'], 'gpt-5.6-luna')
-        self.assertEqual(mc.decide([event(failure_class='complexity')])['model'], 'gpt-5.6-sol')
+        self.assertEqual(mc.decide([event(failure_class='reasoning')])['model'], 'gpt-6-luna')
+        self.assertEqual(mc.decide([event(failure_class='complexity')])['model'], 'gpt-6.1-sol')
+
+    def test_previous_generation_history_remains_readable(self):
+        previous = event(model='gpt-5.6-luna', effort='medium', failure_class='reasoning')
+        decision = mc.decide([previous])
+        self.assertEqual(decision['action'], 'escalate')
+        self.assertEqual((decision['model'], decision['effort']), ('gpt-6-luna', 'high'))
 
     def test_unknown_classes_fail_closed_and_duplicate_events_rejected(self):
         with self.assertRaises(ValueError): mc.decide([event(failure_class='mystery')])

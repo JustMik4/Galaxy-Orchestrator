@@ -158,7 +158,7 @@ class BootstrapTests(unittest.TestCase):
         result = bootstrap(target, catalog_root=self.catalog)
         self.assertTrue(result.applied)
         root_config = (target / ".codex/config.toml").read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-5.6-sol"', root_config)
+        self.assertIn('model = "gpt-6.1-sol"', root_config)
         self.assertIn('model_reasoning_effort = "medium"', root_config)
         self.assertEqual(
             sorted(path.parent.name for path in (target / ".codex/skills").glob("*/SKILL.md")),

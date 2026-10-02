@@ -94,7 +94,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         ):
             self.assertFalse((self.project / relative).exists(), relative)
         config = (self.project / ".codex/config.toml").read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-5.6-sol"', config)
+        self.assertIn('model = "gpt-6.1-sol"', config)
         self.assertIn('model_reasoning_effort = "medium"', config)
         self.assertEqual(load_project(self.project).team.mode, "SOLO")
 
@@ -309,7 +309,7 @@ class GalaxyV2CliTests(unittest.TestCase):
         declaration = json.loads(project_path.read_text(encoding="utf-8"))
         self.assertEqual(declaration["routing"]["profile"], "critical")
         config = (self.project / ".codex/config.toml").read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-5.6-sol"', config)
+        self.assertIn('model = "gpt-6.1-sol"', config)
         self.assertIn('model_reasoning_effort = "medium"', config)
 
         before = project_path.read_bytes()

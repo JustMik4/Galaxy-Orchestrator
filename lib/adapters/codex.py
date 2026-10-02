@@ -14,7 +14,7 @@ _UNSAFE_CONTENT = re.compile(
 
 
 class CodexAdapter:
-    ROOT_MODEL = "gpt-5.6-sol"
+    ROOT_MODEL = "gpt-6.1-sol"
     ROOT_EFFORT = "medium"
 
     ROLE_SANDBOX = {

@@ -76,6 +76,33 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(decision.route, Route("terra", "medium"))
         self.assertEqual(decision.action, RoutingAction.DISPATCH)
 
+    def test_equivalent_routes_prefer_gpt_6_1_sol(self):
+        entries = [
+            capability("gpt-5.6-sol", "medium", 4, 5),
+            capability("gpt-6-sol", "medium", 4, 5),
+            capability("gpt-6.1-sol", "medium", 4, 5),
+        ]
+        router = CapabilityRouter(
+            CapabilityCatalog(entries, {entry.route.pair for entry in entries})
+        )
+
+        decision = router.route(RoutingRequest(required_capability=4))
+
+        self.assertEqual(decision.route, Route("gpt-6.1-sol", "medium"))
+
+    def test_generation_preference_never_overrides_lower_cost(self):
+        entries = [
+            capability("gpt-5.6-sol", "medium", 4, 4),
+            capability("gpt-6.1-sol", "medium", 4, 5),
+        ]
+        router = CapabilityRouter(
+            CapabilityCatalog(entries, {entry.route.pair for entry in entries})
+        )
+
+        decision = router.route(RoutingRequest(required_capability=4))
+
+        self.assertEqual(decision.route, Route("gpt-5.6-sol", "medium"))
+
     def test_missing_quota_snapshot_blocks_expensive_observed_route(self):
         astra = capability("astra", "medium", 6, 10, frontier=True)
         router = CapabilityRouter(CapabilityCatalog([astra], [astra.route]))

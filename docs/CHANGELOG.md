@@ -2,6 +2,15 @@
 
 As mudanças relevantes do Galaxy Orchestrator são registradas aqui. A especificação histórica V1 permanece em [SPEC-V1.md](SPEC-V1.md).
 
+## Unreleased — família GPT-6 atualizada
+
+- `gpt-6.1-sol` com esforço `medium` passa a ser o root normal gerado pelo adaptador Codex;
+- `gpt-6-luna`, `gpt-6.1-sol` e `gpt-6-astra` substituem a família 5.6 nos presets e na escada de
+  compatibilidade, preservando os papéis de custo, capacidade e frontier;
+- em empate exato de custo e capacidade, o Capability Router prefere `gpt-6.1-sol` e depois os
+  demais modelos GPT-6, sem contornar suporte observado, quota ou autorização;
+- Doctor, templates, documentação e testes passam a verificar a política GPT-6.1 Sol Medium.
+
 ## 2.0.0 — candidato V2
 
 ### Identidade e contrato do projeto
