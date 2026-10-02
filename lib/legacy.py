@@ -7,8 +7,16 @@ from pathlib import Path
 import re
 import sys
 
-LADDER = [('gpt-5.6-luna', 'low'), ('gpt-5.6-luna', 'medium'),
-          ('gpt-5.6-luna', 'high'), ('gpt-5.6-sol', 'high'), ('gpt-6-astra', 'high')]
+LADDER = [('gpt-6-luna', 'low'), ('gpt-6-luna', 'medium'),
+          ('gpt-6-luna', 'high'), ('gpt-6.1-sol', 'high'), ('gpt-6-astra', 'high')]
+LEGACY_ROUTE_POSITIONS = {
+    ('gpt-5.6-luna', 'low'): 0,
+    ('gpt-5.6-luna', 'medium'): 1,
+    ('gpt-5.6-luna', 'high'): 2,
+    ('gpt-5.6-sol', 'medium'): 3,
+    ('gpt-5.6-sol', 'high'): 3,
+}
+ACCEPTED_ROUTES = set(LADDER) | {('gpt-6.1-sol', 'medium')} | set(LEGACY_ROUTE_POSITIONS)
 CLASSES = {'implementation', 'reasoning', 'complexity', 'architecture', 'ambiguity',
            'scope', 'regression', 'infra', 'flaky', 'git'}
 CLASSES.add('context-insufficient')
@@ -25,11 +33,11 @@ def decide(history, preset='balanced', elapsed_minutes=0, known_tokens=None, tok
         ids.add(e['attempt_id'])
         if e['task'] != history[0]['task']: raise ValueError('mixed tasks')
         if e['result'] not in ('passed', 'failed'): raise ValueError('invalid result')
-        if (e['model'], e['effort']) not in LADDER and (e['model'], e['effort']) != ('gpt-5.6-sol', 'medium'):
+        if (e['model'], e['effort']) not in ACCEPTED_ROUTES:
             raise ValueError('unrecognized model/effort')
         if e['result'] == 'failed' and (e.get('failure_class') not in CLASSES or not e.get('signature')):
             raise ValueError('class and signature required')
-    result = dict(action='start', model='gpt-5.6-luna', effort='medium', attempts_used=len(history),
+    result = dict(action='start', model='gpt-6-luna', effort='medium', attempts_used=len(history),
                   attempts_remaining=max(0, cap-len(history)))
     def answer(action, reason):
         return dict(result, action=action, reason=reason)
@@ -56,7 +64,8 @@ def decide(history, preset='balanced', elapsed_minutes=0, known_tokens=None, tok
             return answer('repair', 'One bounded repair with a changed hypothesis')
         if fresh_retries == 0:
             return answer('fresh_agent', 'Stop previous agent; one clean context at same level')
-    position = LADDER.index((last['model'], last['effort'])) if (last['model'], last['effort']) in LADDER else 3
+    route = (last['model'], last['effort'])
+    position = LADDER.index(route) if route in LADDER else LEGACY_ROUTE_POSITIONS.get(route, 3)
     next_position = max(position+1, 3) if category == 'complexity' else position+1
     if next_position >= len(LADDER): return answer('root', 'Highest automatic route exhausted')
     result.update(model=LADDER[next_position][0], effort=LADDER[next_position][1])
@@ -202,7 +211,7 @@ def reputation(events, now=None):
     for key, tasks in sorted(buckets.items()):
         passed = sum(v[1] for v in tasks.values())
         n = len(tasks)
-        cheap = key[2] == 'gpt-5.6-luna' and key[3] in ('low', 'medium')
+        cheap = key[2] == 'gpt-6-luna' and key[3] in ('low', 'medium')
         proposal = 'review_promotion' if n-passed >= 3 else ('review_low_risk_probe' if cheap and passed >= 5 and n == passed else None)
         result.append(dict(zip(('project','task_class','model','effort','policy_version'), key), tasks=n,
                            passed=passed, failed=n-passed, smoothed_success=(passed+1)/(n+2),

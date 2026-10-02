@@ -11,7 +11,7 @@ Generated `.codex` files and `.galaxy/local`, `.galaxy/runtime`,
 untracked. Do not ignore all of `.agents`; project-owned agent instructions
 may be tracked there.
 
-The generated root agent uses Sol at medium reasoning effort. Specialists are
+The generated root agent uses GPT-6.1 Sol at medium reasoning effort. Specialists are
 loaded only from the explicit hot set. Browser fallback requires explicit
 operator approval, and external LLM providers are not part of this project.
 

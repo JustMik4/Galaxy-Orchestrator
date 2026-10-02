@@ -6,7 +6,7 @@ role, model, effort, base_sha, worktree, scope (literal paths; directory ends /)
 depends_on, acceptance, test_commands (argument arrays), preset, max_attempts, max_minutes,
 token_limit (null if unavailable), grant_revision, stop_conditions.
 
-Example: AUTH-03; backend-concurrency; worker; gpt-5.6-luna/medium; scope src/auth/token.py
+Example: AUTH-03; backend-concurrency; worker; gpt-6-luna/medium; scope src/auth/token.py
 and tests/auth/test_token.py; forbid schema/API/dependency changes; acceptance old refresh token
 is invalid before new token becomes usable, reuse rejected, existing auth tests pass.
 If atomicity requires schema change: stop and return to root, do not expand scope.

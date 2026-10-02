@@ -58,7 +58,7 @@ class DoctorTests(unittest.TestCase):
         (self.root / ".gitignore").write_text(".env\n.codex/\n")
         report = run_doctor(
             self.root, galaxy_version="2.0.0",
-            runtime={"effective_model": "gpt-5.6-sol", "effective_effort": "medium"},
+            runtime={"effective_model": "gpt-6.1-sol", "effective_effort": "medium"},
             quota_snapshot=QuotaSnapshot(90, 90),
             capabilities=[Capability("github.repository.create", "native", "github-native")],
         )
@@ -97,7 +97,7 @@ class DoctorTests(unittest.TestCase):
     def test_tracked_generated_is_fail_by_default_and_warn_policy_is_supported(self):
         generated = self.root / ".codex" / "config.toml"
         generated.parent.mkdir()
-        generated.write_text('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\n')
+        generated.write_text('model = "gpt-6.1-sol"\nmodel_reasoning_effort = "medium"\n')
         self._git("init")
         self._git("add", ".")
         strict = run_doctor(self.root)
@@ -145,7 +145,7 @@ class DoctorTests(unittest.TestCase):
     def test_valid_codex_toml_is_reported_explicitly(self):
         config = self.root / ".codex/config.toml"
         config.parent.mkdir()
-        config.write_text('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\n')
+        config.write_text('model = "gpt-6.1-sol"\nmodel_reasoning_effort = "medium"\n')
         report = run_doctor(self.root)
         self.assertEqual(next(c for c in report.checks if c.id == "codex-config").status, CheckStatus.PASS)
 

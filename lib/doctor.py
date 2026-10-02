@@ -277,10 +277,10 @@ def _check_generated(root: Path, project: Any, checks: list[CheckRecord]) -> Non
     _record(checks, "codex-config", PASS, "generated .codex/config.toml is valid")
     model = data.get("model")
     effort = data.get("model_reasoning_effort", data.get("reasoning_effort"))
-    if model != "gpt-5.6-sol" or effort != "medium":
-        _record(checks, "root-policy", FAIL, f"default root must be Sol Medium (found {model or 'missing'}/{effort or 'missing'})", REMEDIATIONS["bootstrap"])
+    if model != "gpt-6.1-sol" or effort != "medium":
+        _record(checks, "root-policy", FAIL, f"default root must be GPT-6.1 Sol Medium (found {model or 'missing'}/{effort or 'missing'})", REMEDIATIONS["bootstrap"])
     else:
-        _record(checks, "root-policy", PASS, "default root = Sol Medium")
+        _record(checks, "root-policy", PASS, "default root = GPT-6.1 Sol Medium")
     try:
         from lib.bootstrap import bootstrap_plan
         plan = bootstrap_plan(root)

@@ -24,7 +24,7 @@ Se README, plano ou exemplo divergir do código e da SPEC V2, trate a divergênc
 - [OpenAI — Model guidance](https://developers.openai.com/api/docs/guides/latest-model)
 - [OpenAI — All models](https://developers.openai.com/api/docs/models/all)
 
-Os identificadores `gpt-5.6-sol`, `gpt-5.6-luna` e `gpt-6-astra` no Galaxy são alvos de roteamento do adaptador. A disponibilidade efetiva depende do host/conta. O Runtime Verifier deve registrar o que foi observado; documentação de modelo não substitui telemetria do runtime.
+Os identificadores `gpt-6.1-sol`, `gpt-6-luna` e `gpt-6-astra` no Galaxy são alvos de roteamento do adaptador. A disponibilidade efetiva depende do host/conta. O Runtime Verifier deve registrar o que foi observado; documentação de modelo não substitui telemetria do runtime.
 
 ## Git e GitHub
 

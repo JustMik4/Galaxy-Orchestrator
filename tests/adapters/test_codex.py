@@ -17,7 +17,7 @@ class CodexAdapterTests(unittest.TestCase):
         first = adapter.render(self.hot)
         second = adapter.render(self.hot)
         self.assertEqual(first, second)
-        self.assertIn('model = "gpt-5.6-sol"', first[".codex/config.toml"])
+        self.assertIn('model = "gpt-6.1-sol"', first[".codex/config.toml"])
         self.assertIn('model_reasoning_effort = "medium"', first[".codex/config.toml"])
         self.assertIn("[agents.architect]", first[".codex/config.toml"])
         self.assertNotIn('model = ', first[".codex/agents/architect.toml"])

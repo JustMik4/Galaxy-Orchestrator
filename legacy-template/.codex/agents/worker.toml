@@ -1,4 +1,4 @@
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = "Implement only the assigned contract in the assigned worktree. Test first for behavior changes. Stop for interface, schema, dependency or scope expansion. Report actual diff and test evidence. Do not delegate."

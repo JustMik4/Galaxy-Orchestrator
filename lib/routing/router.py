@@ -152,6 +152,12 @@ class CapabilityRouter:
     _ROOT_FAILURES = frozenset(
         {FailureClass.AMBIGUITY, FailureClass.SCOPE, FailureClass.REGRESSION, FailureClass.MIGRATION_CONFLICT}
     )
+    _MODEL_GENERATION_PREFERENCE = {
+        "gpt-6.1-sol": 0,
+        "gpt-6-astra": 1,
+        "gpt-6-sol": 1,
+        "gpt-6-luna": 1,
+    }
 
     def __init__(
         self,
@@ -250,7 +256,15 @@ class CapabilityRouter:
             if item.capability >= requirement
             and (above is None or item.capability > above.capability or item.expected_cost > above.expected_cost)
         ]
-        return sorted(result, key=lambda item: (item.expected_cost, item.capability, item.route))
+        return sorted(
+            result,
+            key=lambda item: (
+                item.expected_cost,
+                item.capability,
+                self._MODEL_GENERATION_PREFERENCE.get(item.route.model, 2),
+                item.route,
+            ),
+        )
 
     def _check_quota(
         self,

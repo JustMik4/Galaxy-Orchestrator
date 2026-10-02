@@ -2,7 +2,7 @@
   {
     "event_id": "example",
     "role": "root",
-    "model": "gpt-5.6-sol",
+    "model": "gpt-6.1-sol",
     "effort": "high",
     "counter_mode": "delta",
     "input_tokens": null,
